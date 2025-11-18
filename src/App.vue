@@ -5,10 +5,10 @@
         <h1 class="logo">Canvas Editor</h1>
         <div class="file-actions">
           <button class="toolbar-btn" @click="handleSave">
-            <span>保存111</span>
+            <span>保存</span>
           </button>
           <button class="toolbar-btn" @click="handleUndo" :disabled="!canUndo">
-            <span>撤销</span>
+            <span>撤销123</span>
           </button>
           <button class="toolbar-btn" @click="handleRedo" :disabled="!canRedo">
             <span>重做</span>
