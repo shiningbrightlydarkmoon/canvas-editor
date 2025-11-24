@@ -1,3 +1,5 @@
+//类型定义
+
 /**
  * 画布元素接口
  * 定义了画布上的元素共有的属性和方法。
@@ -15,7 +17,18 @@ export interface CanvasElement {
   content?: string // 文本内容（可选）
   imageUrl?: string // 图片URL（可选）
   filters?: FilterConfig[] // 滤镜配置（可选）
+  isSelected?: boolean // 选中状态
+  zIndex?: number // 图层顺序
+  opacity?: number // 透明度
+  isLocked?: boolean // 是否锁定元素
+  createdAt: number // 创建时间戳
+  updatedAt: number // 最后更新时间戳
 }
+
+/**
+ * 创建元素时的输入数据（不包含自动生成的字段）
+ */
+export type CreateElementInput = Omit<CanvasElement, 'id' | 'createdAt' | 'updatedAt'>
 
 /**
  * 元素样式接口
@@ -28,9 +41,11 @@ export interface ElementStyle {
   fontSize?: number // 文字大小
   fontFamily?: string // 字体
   color?: string // 文字颜色
-  fontWeight?: number // 字体粗细
+  fontWeight?: number | 'normal' | 'bold' | 'lighter' | 'bolder' // 字体粗细
   fontStyle?: 'normal' | 'italic' | 'oblique' // 字体样式
   textDecoration?: 'none' | 'underline' | 'line-through' // 文字装饰
+  cornerRadius?: number // 圆角矩形的圆角半径
+  lineCap?: 'butt' | 'round' | 'square' // 线段端点样式
 }
 
 /**
