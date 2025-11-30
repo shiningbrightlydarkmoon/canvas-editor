@@ -27,7 +27,7 @@
 
 <script setup lang="ts">
 import { Trash2, Copy, Layers } from 'lucide-vue-next'
-import type { CanvasElement } from '@/core/types/canvas'
+import type { CanvasElement } from '@/core/types'
 
 const { elements } = defineProps<{
   elements: CanvasElement[]

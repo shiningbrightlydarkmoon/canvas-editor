@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { CanvasElement, ViewportState } from '@/core/types/canvas'
+import type { CanvasElement, ViewportState } from '@/core/types'
 import { generateId } from '@/lib/utils/id'
 
 export const useCanvasStore = defineStore('canvas', () => {

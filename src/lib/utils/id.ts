@@ -3,8 +3,11 @@
  * 生成唯一ID
  *  格式: el_时间戳_随机数
  */
+let idCounter = 0 // 静态计数器
+
 export const generateId = (): string => {
-  return `el_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`
+  idCounter = (idCounter + 1) % 1000 // 循环防止溢出
+  return `el_${Date.now()}_${idCounter}_${Math.random().toString(36).substring(2, 6)}`
 }
 
 /**

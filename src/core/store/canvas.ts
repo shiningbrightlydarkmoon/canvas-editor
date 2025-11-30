@@ -1,8 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { CanvasElement, ViewportState, CreateElementInput } from '@/core/types/canvas'
+import type { CanvasElement, ViewportState, CreateElementInput } from '@/core/types'
 import { generateId, deepClone } from '@/lib/utils/id'
 import { EventBus, CANVAS_EVENTS } from '@/core/events/EventBus'
+import { useClipboardStore } from './clipboard'
+import { useHistoryStore } from './history'
 
 // 创建新元素的辅助函数
 const createNewElement = (elementData: CreateElementInput): CanvasElement => {
@@ -42,6 +44,8 @@ export const useCanvasStore = defineStore('canvas', () => {
   const elements = ref<Record<string, CanvasElement>>({})
   const selectedIds = ref<string[]>([])
   const viewport = ref<ViewportState>({ zoom: 1, x: 0, y: 0 })
+  const clipboardStore = useClipboardStore()
+  const historyStore = useHistoryStore()
 
   // 计算属性
   const selectedElements = computed((): CanvasElement[] => {
@@ -68,10 +72,37 @@ export const useCanvasStore = defineStore('canvas', () => {
     return Object.values(elements.value).filter(element => element !== undefined)
   })
 
+  // 辅助函数：获取当前最大的 zIndex
+  const getMaxZIndex = () => {
+    const allElements = Object.values(elements.value)
+    if (allElements.length === 0) return 0
+    return Math.max(...allElements.map(el => el.zIndex || 0))
+  }
+  // 辅助函数：获取当前最小的 zIndex
+  const getMinZIndex = () => {
+    const allElements = Object.values(elements.value)
+    if (allElements.length === 0) return 0
+    return Math.min(...allElements.map(el => el.zIndex || 0))
+  }
+
   // 元素操作
   const addElement = (elementData: CreateElementInput): string => {
-    const newElement = createNewElement(elementData)
+    // 记录操作前状态
+    const prevState = deepClone(elements.value)
+    const nextZIndex = getMaxZIndex() + 1
+    const newElement = createNewElement({
+    ...elementData,
+    zIndex: nextZIndex // 确保新元素在最顶层
+  })
     elements.value[newElement.id] = newElement
+
+    // 添加历史记录
+    historyStore.pushHistory(
+      `添加${newElement.type}元素`,
+      prevState,
+      elements.value,
+      'add'
+    )
 
     EventBus.emit(CANVAS_EVENTS.ELEMENT_ADDED, newElement)
     return newElement.id
@@ -84,6 +115,8 @@ export const useCanvasStore = defineStore('canvas', () => {
       return false
     }
 
+    // 记录操作前状态
+    const prevState = deepClone(elements.value)
     const oldElement = deepClone(existingElement)
 
     // 创建更新后的元素
@@ -94,6 +127,14 @@ export const useCanvasStore = defineStore('canvas', () => {
     }
 
     elements.value[id] = updatedElement
+
+    // 添加历史记录
+    historyStore.pushHistory(
+      `更新${updatedElement.type}元素`,
+      prevState,
+      elements.value,
+      'update'
+    )
 
     EventBus.emit(CANVAS_EVENTS.ELEMENT_UPDATED, {
       element: updatedElement,
@@ -108,8 +149,19 @@ export const useCanvasStore = defineStore('canvas', () => {
     const element = elements.value[id]
     if (!element) return false
 
+
+    // 记录操作前状态
+    const prevState = deepClone(elements.value)
     delete elements.value[id]
     selectedIds.value = selectedIds.value.filter(selectedId => selectedId !== id)
+
+    // 添加历史记录
+    historyStore.pushHistory(
+      `删除${element.type}元素`,
+      prevState,
+      elements.value,
+      'delete'
+    )
 
     EventBus.emit(CANVAS_EVENTS.ELEMENT_DELETED, element)
     return true
@@ -119,19 +171,79 @@ export const useCanvasStore = defineStore('canvas', () => {
     const selectedCount = selectedIds.value.length
     if (selectedCount === 0) return 0
 
-    // 记录要删除的元素
-    const elementsToDelete = [...selectedIds.value]
+    // 记录操作前状态 (用于撤销)
+    const prevState = deepClone(elements.value)
 
-    // 删除元素
-    elementsToDelete.forEach(id => {
-      delete elements.value[id]
+    // 暂存要删除的 ID 列表
+    const idsToDelete = [...selectedIds.value]
+
+    // 执行删除操作
+    idsToDelete.forEach(id => {
+      const element = elements.value[id]
+      if (element) {
+        delete elements.value[id]
+        // 如果有图层树组件需要监听单个删除，可以在这里发出事件
+        // EventBus.emit(CANVAS_EVENTS.ELEMENT_DELETED, element)
+      }
     })
 
-    // 清空选择
+    // 清空选中状态
     selectedIds.value = []
+
+    // 记录历史
+    historyStore.pushHistory(
+      `删除${selectedCount}个元素`,
+      prevState,
+      elements.value,
+      'delete'
+    )
+
+    // 广播事件：通知外部选中状态已变为空
+    // 根据 EventBus.ts 定义，这里使用 ELEMENT_SELECTED 事件传递空数组
+    EventBus.emit(CANVAS_EVENTS.ELEMENT_SELECTED, [])
 
     return selectedCount
   }
+
+// 置顶选中元素
+const bringToFront = (): void => {
+  const selected = selectedElements.value
+  if (selected.length === 0) return
+
+  const prevState = deepClone(elements.value)
+  let currentMax = getMaxZIndex()
+
+  selected.forEach((el) => {
+    currentMax += 1
+    const targetElement = elements.value[el.id]
+    if (targetElement) {
+      targetElement.zIndex = currentMax
+      targetElement.updatedAt = Date.now()
+    }
+  })
+
+  historyStore.pushHistory('置顶元素', prevState, elements.value, 'update')
+}
+
+// 置底选中元素
+const sendToBack = (): void => {
+  const selected = selectedElements.value
+  if (selected.length === 0) return
+
+  const prevState = deepClone(elements.value)
+  let currentMin = getMinZIndex()
+
+  selected.forEach((el) => {
+    currentMin -= 1
+    const targetElement = elements.value[el.id]
+    if (targetElement) {
+      targetElement.zIndex = currentMin
+      targetElement.updatedAt = Date.now()
+    }
+  })
+
+  historyStore.pushHistory('置底元素', prevState, elements.value, 'update')
+}
 
   const getElement = (id: string): CanvasElement | null => {
     return elements.value[id] || null
@@ -197,6 +309,78 @@ export const useCanvasStore = defineStore('canvas', () => {
     })
   }
 
+  // 复制所有选中的额元素
+  const copySelectedElements = (): void => {
+    if (selectedElements.value.length === 0) return
+    clipboardStore.copy(selectedElements.value)
+  }
+
+  // 剪切选中元素
+  const cutSelectedElements = (): void => {
+    if (selectedElements.value.length === 0) return
+
+    const result = clipboardStore.cut(selectedElements.value)
+    if (result) {
+      // 剪切后删除原元素
+      deleteSelectedElements()
+    }
+  }
+
+  // 粘贴元素
+  const pasteElements = (): number => {
+    if (!canPaste()) return 0
+
+    // 记录操作前的状态 (PrevState)
+    const prevState = deepClone(elements.value)
+
+    const pastedElements = clipboardStore.paste()
+
+    // 添加到画布
+    pastedElements.forEach((element: CanvasElement) => {
+      elements.value[element.id] = element
+      EventBus.emit(CANVAS_EVENTS.ELEMENT_ADDED, element)
+    })
+
+    // 如果有粘贴内容，记录历史并选中
+    if (pastedElements.length > 0) {
+      // 记录历史
+      historyStore.pushHistory(
+        `粘贴${pastedElements.length}个元素`,
+        prevState,         // 粘贴前的状态
+        elements.value,    // 粘贴后的状态
+        'add'
+      )
+
+      // 选中新粘贴的元素
+      selectMultiple(pastedElements.map(el => el.id))
+    }
+
+    return pastedElements.length
+  }
+
+  // 检查是否可粘贴
+  const canPaste = (): boolean => {
+    return clipboardStore.hasData()
+  }
+
+  // 撤销重做
+  const undo = (): void => {
+    const prevState = historyStore.undo()
+    if (prevState) {
+      elements.value = deepClone(prevState)
+      // 撤销后清除选中状态
+      clearSelection()
+    }
+  }
+
+  const redo = (): void => {
+    const nextState = historyStore.redo()
+    if (nextState) {
+      elements.value = deepClone(nextState)
+      // 重做后清除选中状态
+      clearSelection()
+    }
+  }
   // 视图操作
   const updateViewport = (updates: Partial<ViewportState>): void => {
     const oldViewport = { ...viewport.value }
@@ -294,11 +478,27 @@ export const useCanvasStore = defineStore('canvas', () => {
     getElement,
     getAllElements,
 
+    // 图层操作
+    bringToFront,
+    sendToBack,
+
     // 选择操作
     selectElement,
     selectMultiple,
     clearSelection,
     toggleElementSelection,
+
+    // 复制粘贴方法
+    copySelectedElements,
+    cutSelectedElements,
+    pasteElements,
+    canPaste,
+
+    // 撤销重做
+    undo,
+    redo,
+    canUndo: computed(() => historyStore.canUndo),
+    canRedo: computed(() => historyStore.canRedo),
 
     // 视图操作
     updateViewport,
