@@ -39,7 +39,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import type { CanvasElement } from '@/core/types/canvas'
+import type { CanvasElement } from '@/core/types'
 
 const props = defineProps<{
   element: CanvasElement

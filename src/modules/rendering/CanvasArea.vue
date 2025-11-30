@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, nextTick } from 'vue'
 import * as PIXI from 'pixi.js'
-import type { CanvasElement, ViewportState } from '@/core/types/canvas'
+import type { CanvasElement, ViewportState } from '@/core/types'
 
 interface Props {
   zoom?: number
