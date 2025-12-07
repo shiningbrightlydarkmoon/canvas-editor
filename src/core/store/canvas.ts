@@ -1,10 +1,12 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { CanvasElement, ViewportState, CreateElementInput } from '@/core/types'
-import { generateId, deepClone } from '@/lib/utils/id'
+import { generateId, deepClone, debounce } from '@/lib/utils/id'
 import { EventBus, CANVAS_EVENTS } from '@/core/events/EventBus'
 import { useClipboardStore } from './clipboard'
 import { useHistoryStore } from './history'
+import { saveToDB, loadFromDB } from '@/lib/utils/storage'
+
 
 // 创建新元素的辅助函数
 const createNewElement = (elementData: CreateElementInput): CanvasElement => {
@@ -400,11 +402,35 @@ const sendToBack = (): void => {
     updateViewport({ zoom: 0.8, x: 50, y: 50 })
   }
 
+  // 自动保存（IndexedDB）
+  // AI建议：
+  // 使用 debounce 防抖：只有当数据变化停止 500ms 后，才真正执行保存
+  // 这样可以避免拖拽过程中频繁读写数据库，极大提升性能
+  const debouncedSave = debounce(async (newVal: Record<string, CanvasElement>) => {
+    await saveToDB(deepClone(newVal))
+  }, 500) // 延迟 500ms
+
+  watch(elements, (newVal) => {
+    debouncedSave(newVal)
+  }, { deep: true })
+
+
   // 初始化示例数据
-  const initializeWithSampleData = (): void => {
-    // 清空现有数据
-    elements.value = {}
-    selectedIds.value = []
+  const initializeWithSampleData = async (): Promise<void> => {
+    // 尝试从 IndexedDB 加载数据
+    console.log('尝试从 IndexedDB 加载数据...')
+    const saved = await loadFromDB()
+
+    if (saved && Object.keys(saved).length > 0) {
+      console.log('加载到已保存的数据')
+      elements.value = saved
+      selectedIds.value = []
+      return
+    } else {
+      console.log('无存档，加载默认示例')
+      elements.value = {}
+      selectedIds.value = []
+    }
 
     // 添加示例矩形
     addElement({
