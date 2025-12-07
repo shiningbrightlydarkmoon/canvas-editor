@@ -1,6 +1,7 @@
 /**
  * 将 File 对象转换为 Base64 字符串
  * @param file 用户上传的文件对象
+ * @returns 包含文件内容的 Base64 字符串的 Promise
  */
 export const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -20,3 +21,4 @@ export const fileToBase64 = (file: File): Promise<string> => {
     reader.readAsDataURL(file)
   })
 }
+
