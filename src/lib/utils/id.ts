@@ -19,15 +19,20 @@ export const generateHistoryId = (): string => {
 
 /**
  * 防抖函数
+ * 使用泛型 Args 捕获参数类型，避免使用 any
  */
-export const debounce = <T extends (...args: unknown[]) => void>(
-  func: T,
-  wait: number,
-): ((...args: Parameters<T>) => void) => {
-  let timeout: number
-  return (...args: Parameters<T>) => {
-    clearTimeout(timeout)
-    timeout = setTimeout(() => func(...args), wait)
+// <Args extends unknown[]>: 这表示 Args 是一个数组类型（参数列表本质上是元组），但我们不限制数组里具体存什么,可以通过Lint检查
+export const debounce = <Args extends unknown[]>(
+  func: (...args: Args) => unknown, // 允许函数返回任何值（包括 Promise）
+  wait: number
+): ((...args: Args) => void) => {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+
+  return (...args: Args) => {
+    if (timeout) clearTimeout(timeout)
+    timeout = setTimeout(() => {
+      func(...args)
+    }, wait)
   }
 }
 
