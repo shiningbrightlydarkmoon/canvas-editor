@@ -82,7 +82,7 @@ import { ref, computed } from 'vue'
 import CanvasArea from '@/modules/rendering/CanvasArea.vue'
 import FloatingToolbar from '@/modules/ui/components/FloatingToolbar.vue'
 import ElementProperties from '@/modules/ui/components/ElementProperties.vue'
-import type { CanvasElement } from '@/core/types/canvas'
+import type { CanvasElement } from '@/core/types'
 
 // 状态数据
 const elements = ref<CanvasElement[]>([
@@ -99,6 +99,8 @@ const elements = ref<CanvasElement[]>([
       stroke: '#000000',
       strokeWidth: 1,
     },
+    createdAt: 0,
+    updatedAt: 0
   },
   {
     id: '2',
@@ -117,6 +119,8 @@ const elements = ref<CanvasElement[]>([
       color: '#2c3e50',
     },
     content: 'Hello World',
+    createdAt: 0,
+    updatedAt: 0
   },
 ])
 
@@ -144,6 +148,8 @@ const addShape = (type: CanvasElement['type']) => {
       stroke: '#000000',
       strokeWidth: 1,
     },
+    createdAt: 0,
+    updatedAt: 0
   }
 
   if (type === 'text') {
