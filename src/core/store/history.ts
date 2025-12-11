@@ -87,7 +87,7 @@ export const useHistoryStore = defineStore('history', () => {
     return record.nextState
   }
 
-  // ========== 清空历史 ==========
+  // 清空历史
   const clearHistory = () => {
     historyStack.value = []
     currentIndex.value = -1
