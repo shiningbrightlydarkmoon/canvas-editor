@@ -4,14 +4,14 @@
       <div class="header-left">
         <h1 class="logo">Canvas Editor</h1>
         <div class="file-actions">
-          <button class="toolbar-btn" @click="handleSave">
+          <button class="toolbar-btn" @click="handleSave" title="数据已启用自动保存 (IndexedDB)">
             <span>保存</span>
           </button>
           <button class="toolbar-btn" @click="handleUndo" :disabled="!canUndo">
-            <span>撤销</span>
+            <span>撤销 (Ctrl+Z)</span>
           </button>
           <button class="toolbar-btn" @click="handleRedo" :disabled="!canRedo">
-            <span>重做</span>
+            <span>重做 (Ctrl+Y)</span>
           </button>
         </div>
       </div>
@@ -78,65 +78,39 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { onMounted } from 'vue'
+import { useCanvasStore } from '@/core/store/canvas'
+import { storeToRefs } from 'pinia'
+import { useShortcuts } from '@/core/composables/useShortcuts'
+
 import CanvasArea from '@/modules/rendering/CanvasArea.vue'
 import FloatingToolbar from '@/modules/ui/components/FloatingToolbar.vue'
 import ElementProperties from '@/modules/ui/components/ElementProperties.vue'
 import type { CanvasElement } from '@/core/types'
 
-// 状态数据
-const elements = ref<CanvasElement[]>([
-  {
-    id: '1',
-    type: 'rect',
-    name: '矩形 1',
-    x: 100,
-    y: 100,
-    width: 200,
-    height: 150,
-    style: {
-      fill: '#3498db',
-      stroke: '#000000',
-      strokeWidth: 1,
-    },
-    createdAt: 0,
-    updatedAt: 0
-  },
-  {
-    id: '2',
-    type: 'text',
-    name: '文本 1',
-    x: 150,
-    y: 200,
-    width: 100,
-    height: 50,
-    style: {
-      fill: 'transparent',
-      stroke: 'transparent',
-      strokeWidth: 0,
-      fontSize: 16,
-      fontFamily: 'Arial',
-      color: '#2c3e50',
-    },
-    content: 'Hello World',
-    createdAt: 0,
-    updatedAt: 0
-  },
-])
+// 1. 初始化 Store
+const canvasStore = useCanvasStore()
+// 启用快捷键
+useShortcuts()
 
-const selectedElementIds = ref<string[]>([])
-const canUndo = ref(false)
-const canRedo = ref(false)
+// 2. 使用 storeToRefs 替换本地状态
+const {
+  elementsArray: elements,
+  selectedIds: selectedElementIds,
+  selectedElements,
+  canUndo,
+  canRedo,
+} = storeToRefs(canvasStore)
 
-// 计算属性：选中的元素
-const selectedElements = computed(() => {
-  return elements.value.filter((element) => selectedElementIds.value.includes(element.id))
+// 3. 异步加载数据 (IndexedDB)
+onMounted(async () => {
+  await canvasStore.initializeWithSampleData()
 })
 
-// 添加图形
+// --- 事件处理器 ---
+
 const addShape = (type: CanvasElement['type']) => {
-  const newElement: CanvasElement = {
-    id: `el_${Date.now()}`,
+  canvasStore.addElement({
     type,
     name: `${type} ${elements.value.length + 1}`,
     x: 100 + elements.value.length * 50,
@@ -147,76 +121,33 @@ const addShape = (type: CanvasElement['type']) => {
       fill: '#3498db',
       stroke: '#000000',
       strokeWidth: 1,
+      ...(type === 'text' ? { fontSize: 16, fontFamily: 'Arial', color: '#2c3e50' } : {}),
     },
-    createdAt: 0,
-    updatedAt: 0
-  }
-
-  if (type === 'text') {
-    newElement.style.fontSize = 16
-    newElement.style.fontFamily = 'Arial'
-    newElement.style.color = '#2c3e50'
-    newElement.content = '文本'
-  }
-
-  elements.value.push(newElement)
+    content: type === 'text' ? '文本' : undefined,
+  })
 }
 
-// 选择元素
 const selectElement = (id: string) => {
-  selectedElementIds.value = [id]
+  canvasStore.selectElement(id)
 }
 
-// 处理选择变化
 const handleSelectionChange = (selectedElements: CanvasElement[]) => {
-  selectedElementIds.value = selectedElements.map((el) => el.id)
+  const ids = selectedElements.map((el) => el.id)
+  canvasStore.selectMultiple(ids)
 }
 
-// 处理属性变化
 const handleElementPropertyChange = (properties: Partial<CanvasElement>) => {
   if (selectedElements.value.length === 1) {
-    const element = selectedElements.value[0]
-    if (!element) return
-
-    // 分别处理普通属性和样式属性
-    const { style, ...otherProperties } = properties
-
-    // 合并普通属性
-    if (otherProperties && Object.keys(otherProperties).length > 0) {
-      Object.assign(element, otherProperties)
-    }
-
-    // 合并样式属性
-    if (style && Object.keys(style).length > 0) {
-      Object.assign(element.style, style)
-    }
+    canvasStore.updateElement(selectedElements.value[0]!.id, properties)
   }
 }
 
-// 删除元素
-const handleDelete = () => {
-  if (selectedElementIds.value.length > 0) {
-    elements.value = elements.value.filter(
-      (element) => !selectedElementIds.value.includes(element.id),
-    )
-    selectedElementIds.value = []
-  }
-}
-
-// 复制元素
-const handleDuplicate = () => {
-  console.log('复制元素')
-}
-
-// 置顶元素
-const handleBringToFront = () => {
-  console.log('置顶元素')
-}
-
-// 其他功能
-const handleSave = () => console.log('保存')
-const handleUndo = () => console.log('撤销')
-const handleRedo = () => console.log('重做')
+const handleDelete = () => canvasStore.deleteSelectedElements()
+const handleDuplicate = () => canvasStore.copySelectedElements()
+const handleBringToFront = () => canvasStore.bringToFront()
+const handleSave = () => console.log('保存：已启用自动保存')
+const handleUndo = () => canvasStore.undo()
+const handleRedo = () => canvasStore.redo()
 </script>
 
 <style scoped>
