@@ -41,13 +41,12 @@ onMounted(async () => {
   if (!canvasContainer.value) return
 
   try {
-    // ✅ 修复 1：PIXI v8 必须使用 init() 异步初始化
     const pixiApp = new PIXI.Application()
 
     await pixiApp.init({
       width: canvasContainer.value.clientWidth,
       height: canvasContainer.value.clientHeight,
-      backgroundColor: 0xf8f9fa,
+      backgroundAlpha: 0,
       antialias: true,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
@@ -56,7 +55,6 @@ onMounted(async () => {
 
     app = pixiApp // 初始化完成后再赋值
 
-    // ✅ 修复 2：使用 app.canvas (v8)
     canvasContainer.value.appendChild(app.canvas)
 
     // 设置初始缩放
@@ -91,7 +89,6 @@ onUnmounted(() => {
 })
 
 const renderElements = (elementsToRender: CanvasElement[], selectedIds: string[]) => {
-  // ✅ 安全检查：确保 app 和 renderer 已经完全初始化
   if (!app || !app.renderer) return
 
   // 清空画布
@@ -108,7 +105,6 @@ const renderElements = (elementsToRender: CanvasElement[], selectedIds: string[]
     const isTransparent = element.style.fill === 'transparent'
     const fillAlpha = isTransparent ? 0 : (element.opacity ?? 1)
 
-    // ✅ 修复 3：使用 v8 新绘图 API (消除 drawRect/beginFill 警告)
 
     // 1. 定义路径 (Context)
     switch (element.type) {
@@ -159,7 +155,6 @@ const renderElements = (elementsToRender: CanvasElement[], selectedIds: string[]
         wordWrapWidth: element.width,
       })
 
-      // ✅ 修复 4：PIXI v8 推荐使用对象参数创建 Text
       const text = new PIXI.Text({ text: element.content || '文本', style: textStyle })
       text.x = element.x
       text.y = element.y
@@ -197,8 +192,8 @@ const renderElements = (elementsToRender: CanvasElement[], selectedIds: string[]
         emit('selection-change', [clickedElement])
       }
     })
-    if(app==null) return;
-    app.stage.addChild(graphics)
+    if(app)
+      app.stage.addChild(graphics)
   })
 
   // 舞台点击事件（取消选择）
