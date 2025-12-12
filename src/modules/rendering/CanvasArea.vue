@@ -3,13 +3,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick } from 'vue'
+import { ref, onMounted, watch, nextTick, onUnmounted } from 'vue'
 import * as PIXI from 'pixi.js'
 import type { CanvasElement, ViewportState } from '@/core/types'
 
 interface Props {
-  zoom?: number
   elements: CanvasElement[]
+  selectedIds: string[]
+  zoom?: number
 }
 
 interface Emits {
@@ -19,18 +20,19 @@ interface Emits {
 
 const props = withDefaults(defineProps<Props>(), {
   zoom: 1,
+  selectedIds: () => [],
 })
 
 const emit = defineEmits<Emits>()
 
 const canvasContainer = ref<HTMLDivElement>()
 let app: PIXI.Application | null = null
-const selectedElements = ref<CanvasElement[]>([])
 
 // 扩展 Graphics 类型以存储自定义数据
 declare module 'pixi.js' {
   interface Graphics {
     elementData?: CanvasElement
+    isSelectable?: boolean
   }
 }
 
@@ -39,30 +41,55 @@ onMounted(async () => {
   if (!canvasContainer.value) return
 
   try {
-    app = new PIXI.Application({
+    const pixiApp = new PIXI.Application()
+
+    await pixiApp.init({
       width: canvasContainer.value.clientWidth,
       height: canvasContainer.value.clientHeight,
-      backgroundColor: 0xf8f9fa,
+      backgroundAlpha: 0,
       antialias: true,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
+      preference: 'webgl', // 显式指定 webgl 模式，防止 WebGPU 兼容性问题
     })
 
-    canvasContainer.value.appendChild(app.view as HTMLCanvasElement)
+    app = pixiApp // 初始化完成后再赋值
+
+    canvasContainer.value.appendChild(app.canvas)
 
     // 设置初始缩放
     if (app.stage) {
       app.stage.scale.set(props.zoom, props.zoom)
     }
 
-    renderElements(props.elements)
+    // 监听窗口大小变化
+    const resizeObserver = new ResizeObserver(() => {
+      if (app && app.renderer && canvasContainer.value) {
+        app.renderer.resize(canvasContainer.value.clientWidth, canvasContainer.value.clientHeight)
+        // 更新舞台点击区域
+        app.stage.hitArea = new PIXI.Rectangle(0, 0, app.screen.width, app.screen.height)
+      }
+    })
+    resizeObserver.observe(canvasContainer.value)
+
+    // 初始化完成后手动触发一次渲染
+    renderElements(props.elements, props.selectedIds)
+
   } catch (error) {
     console.error('PIXI 初始化失败:', error)
   }
 })
 
-const renderElements = (elementsToRender: CanvasElement[]) => {
-  if (!app) return
+// 组件销毁时清理 PIXI
+onUnmounted(() => {
+  if (app) {
+    app.destroy(true, { children: true, texture: true })
+    app = null
+  }
+})
+
+const renderElements = (elementsToRender: CanvasElement[], selectedIds: string[]) => {
+  if (!app || !app.renderer) return
 
   // 清空画布
   app.stage.removeChildren()
@@ -71,89 +98,122 @@ const renderElements = (elementsToRender: CanvasElement[]) => {
   elementsToRender.forEach((element) => {
     const graphics = new PIXI.Graphics()
 
-    // 设置样式
-    if (element.style.fill && element.style.fill !== 'transparent') {
-      graphics.beginFill(parseInt(element.style.fill.replace('#', '0x')))
-    }
+    // 准备样式数据
+    const strokeWidth = element.style.strokeWidth ?? 1
+    const strokeColor = parseInt((element.style.stroke || '#000000').replace('#', '0x'))
+    const fillColor = parseInt((element.style.fill || '#ffffff').replace('#', '0x'))
+    const isTransparent = element.style.fill === 'transparent'
+    const fillAlpha = isTransparent ? 0 : (element.opacity ?? 1)
 
-    if (
-      element.style.stroke &&
-      element.style.stroke !== 'transparent' &&
-      element.style.strokeWidth > 0
-    ) {
-      graphics.lineStyle(
-        element.style.strokeWidth,
-        parseInt(element.style.stroke.replace('#', '0x')),
-      )
-    }
 
-    // 绘制形状
+    // 1. 定义路径 (Context)
     switch (element.type) {
       case 'rect':
-        graphics.drawRect(element.x, element.y, element.width, element.height)
+        graphics.rect(element.x, element.y, element.width, element.height)
         break
       case 'circle':
-        graphics.drawCircle(
+        graphics.circle(
           element.x + element.width / 2,
           element.y + element.height / 2,
-          Math.min(element.width, element.height) / 2,
+          Math.min(element.width, element.height) / 2
         )
         break
       case 'triangle':
-        // 简单的三角形绘制
         graphics.moveTo(element.x + element.width / 2, element.y)
         graphics.lineTo(element.x + element.width, element.y + element.height)
         graphics.lineTo(element.x, element.y + element.height)
-        graphics.lineTo(element.x + element.width / 2, element.y)
+        graphics.closePath()
         break
       case 'text':
-        // 文本元素用矩形表示
-        graphics.drawRect(element.x, element.y, element.width, element.height)
-        graphics.beginFill(0xffffff, 0.3) // 半透明背景
-        graphics.drawRect(element.x, element.y, element.width, element.height)
+        // 文本后续单独处理
+        break
+      case 'image':
+        graphics.rect(element.x, element.y, element.width, element.height)
         break
     }
 
-    graphics.endFill()
+    // 2. 填充 (Fill)
+    if (!isTransparent && element.type !== 'text') {
+      graphics.fill({ color: fillColor, alpha: fillAlpha })
+    } else if (element.type === 'image') {
+      // 图片占位符
+      graphics.fill({ color: 0xcccccc, alpha: 0.5 })
+    }
+
+    // 3. 描边 (Stroke)
+    if (strokeWidth > 0 && element.style.stroke !== 'transparent' && element.type !== 'text') {
+      graphics.stroke({ width: strokeWidth, color: strokeColor })
+    }
+
+    // --- 特殊处理文本 ---
+    if (element.type === 'text') {
+      const textStyle = new PIXI.TextStyle({
+        fontSize: element.style.fontSize ?? 16,
+        fill: element.style.color || '#2c3e50',
+        fontFamily: element.style.fontFamily || 'Arial',
+        wordWrap: true,
+        wordWrapWidth: element.width,
+      })
+
+      const text = new PIXI.Text({ text: element.content || '文本', style: textStyle })
+      text.x = element.x
+      text.y = element.y
+
+      // 添加到 graphics 容器
+      graphics.addChild(text)
+
+      // 透明点击区域
+      graphics.rect(element.x, element.y, element.width, element.height).fill({ color: 0xffffff, alpha: 0.01 })
+    }
+
+    // --- 绘制选中高亮框 ---
+    if (selectedIds.includes(element.id)) {
+      // 绘制一个新的图形作为高亮框，叠加在上方
+      const highlight = new PIXI.Graphics()
+      highlight.rect(
+        element.x - 2,
+        element.y - 2,
+        element.width + 4,
+        element.height + 4
+      )
+      highlight.stroke({ width: 2 / props.zoom, color: 0x3498db })
+      graphics.addChild(highlight)
+    }
 
     // 添加交互
-    graphics.interactive = true
+    graphics.eventMode = 'static' // v8 中 interactive 属性被 eventMode 替代
     graphics.cursor = 'pointer'
-
-    // 存储元素数据到自定义属性
     graphics.elementData = element
 
-    graphics.on('pointerdown', (event: PIXI.FederatedPointerEvent) => {
+    graphics.on('pointerdown', (event) => {
       event.stopPropagation()
-      handleElementClick(element)
+      const clickedElement = graphics.elementData
+      if (clickedElement) {
+        emit('selection-change', [clickedElement])
+      }
     })
-
-    app!.stage.addChild(graphics)
+    if(app)
+      app.stage.addChild(graphics)
   })
 
   // 舞台点击事件（取消选择）
-  app.stage.interactive = true
-  app.stage.hitArea = new PIXI.Rectangle(0, 0, app.screen.width, app.screen.height)
-  app.stage.on('pointerdown', (event: PIXI.FederatedPointerEvent) => {
-    if (event.target === app!.stage) {
-      selectedElements.value = []
+  app.stage.eventMode = 'static'
+  app.stage.hitArea = app.screen
+
+  app.stage.on('pointerdown', (event) => {
+    if (event.target === app?.stage) {
       emit('selection-change', [])
     }
   })
 }
 
-const handleElementClick = (element: CanvasElement) => {
-  selectedElements.value = [element]
-  emit('selection-change', [element])
-}
-
 // 监听元素变化
 watch(
-  () => props.elements,
-  (newElements) => {
-    renderElements(newElements)
+  () => [props.elements, props.selectedIds],
+  ([newElements, newSelectedIds]) => {
+    renderElements(newElements as CanvasElement[], newSelectedIds as string[])
   },
-  { deep: true },
+  { deep: true }
 )
 
 // 监听缩放变化
@@ -162,7 +222,6 @@ watch(
   (newZoom) => {
     if (app && app.stage) {
       app.stage.scale.set(newZoom, newZoom)
-      emit('viewport-change', { x: 0, y: 0, zoom: newZoom })
     }
   },
 )
@@ -173,5 +232,6 @@ watch(
   width: 100%;
   height: 100%;
   background: #f8f9fa;
+  overflow: hidden;
 }
 </style>
