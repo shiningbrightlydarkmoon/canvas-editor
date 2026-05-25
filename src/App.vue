@@ -26,6 +26,8 @@
             <div class="shape-item" @click="addShape('circle')" title="圆形">○ 圆形</div>
             <div class="shape-item" @click="addShape('triangle')" title="三角形">△ 三角形</div>
             <div class="shape-item" @click="addShape('text')" title="文本">T 文本</div>
+            <div class="shape-item" @click="triggerImageUpload" title="图片">🖼 图片</div>
+            <input ref="imageInput" type="file" accept="image/png,image/jpeg" hidden @change="handleImageUpload" />
           </div>
         </div>
 
@@ -62,6 +64,7 @@
               @delete="handleDelete"
               @duplicate="handleDuplicate"
               @bringToFront="handleBringToFront"
+              @sendToBack="handleSendToBack"
             />
           </div>
         </div>
@@ -78,10 +81,11 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useCanvasStore } from '@/core/store/canvas'
 import { storeToRefs } from 'pinia'
 import { useShortcuts } from '@/core/composables/useShortcuts'
+import { fileToBase64 } from '@/lib/utils/file'
 
 import CanvasArea from '@/modules/rendering/CanvasArea.vue'
 import FloatingToolbar from '@/modules/ui/components/FloatingToolbar.vue'
@@ -145,9 +149,42 @@ const handleElementPropertyChange = (properties: Partial<CanvasElement>) => {
 const handleDelete = () => canvasStore.deleteSelectedElements()
 const handleDuplicate = () => canvasStore.copySelectedElements()
 const handleBringToFront = () => canvasStore.bringToFront()
+const handleSendToBack = () => canvasStore.sendToBack()
 const handleSave = () => console.log('保存：已启用自动保存')
 const handleUndo = () => canvasStore.undo()
 const handleRedo = () => canvasStore.redo()
+
+// --- 图片上传 ---
+
+const imageInput = ref<HTMLInputElement>()
+
+const triggerImageUpload = () => {
+  imageInput.value?.click()
+}
+
+const handleImageUpload = async (e: Event) => {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  try {
+    const dataUrl = await fileToBase64(file)
+    canvasStore.addElement({
+      type: 'image',
+      name: file.name,
+      x: 100 + elements.value.length * 50,
+      y: 100 + elements.value.length * 50,
+      width: 200,
+      height: 200,
+      imageUrl: dataUrl,
+      style: { fill: '#cccccc', stroke: '#000000', strokeWidth: 0 },
+    })
+  } catch (err) {
+    console.error('图片加载失败:', err)
+  }
+
+  input.value = ''
+}
 </script>
 
 <style scoped>
