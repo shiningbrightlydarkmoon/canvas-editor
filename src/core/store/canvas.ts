@@ -88,9 +88,9 @@ export const useCanvasStore = defineStore('canvas', () => {
   }
 
   // 元素操作
-  const addElement = (elementData: CreateElementInput): string => {
+  const addElement = (elementData: CreateElementInput, skipHistory = false): string => {
     // 记录操作前状态
-    const prevState = deepClone(elements.value)
+    const prevState = skipHistory ? {} : deepClone(elements.value)
     const nextZIndex = getMaxZIndex() + 1
     const newElement = createNewElement({
     ...elementData,
@@ -98,13 +98,14 @@ export const useCanvasStore = defineStore('canvas', () => {
   })
     elements.value[newElement.id] = newElement
 
-    // 添加历史记录
-    historyStore.pushHistory(
-      `添加${newElement.type}元素`,
-      prevState,
-      elements.value,
-      'add'
-    )
+    if (!skipHistory) {
+      historyStore.pushHistory(
+        `添加${newElement.type}元素`,
+        prevState,
+        elements.value,
+        'add'
+      )
+    }
 
     EventBus.emit(CANVAS_EVENTS.ELEMENT_ADDED, newElement)
     return newElement.id
@@ -116,6 +117,7 @@ export const useCanvasStore = defineStore('canvas', () => {
       console.warn(`Element ${id} not found`)
       return false
     }
+    if (existingElement.isLocked) return false
 
     // 记录操作前状态
     const prevState = deepClone(elements.value)
@@ -150,7 +152,7 @@ export const useCanvasStore = defineStore('canvas', () => {
   const deleteElement = (id: string): boolean => {
     const element = elements.value[id]
     if (!element) return false
-
+    if (element.isLocked) return false
 
     // 记录操作前状态
     const prevState = deepClone(elements.value)
@@ -182,10 +184,9 @@ export const useCanvasStore = defineStore('canvas', () => {
     // 执行删除操作
     idsToDelete.forEach(id => {
       const element = elements.value[id]
-      if (element) {
+      if (element && !element.isLocked) {
         delete elements.value[id]
-        // 如果有图层树组件需要监听单个删除，可以在这里发出事件
-        // EventBus.emit(CANVAS_EVENTS.ELEMENT_DELETED, element)
+        EventBus.emit(CANVAS_EVENTS.ELEMENT_DELETED, element)
       }
     })
 
@@ -216,6 +217,7 @@ const bringToFront = (): void => {
   let currentMax = getMaxZIndex()
 
   selected.forEach((el) => {
+    if (el.isLocked) return
     currentMax += 1
     const targetElement = elements.value[el.id]
     if (targetElement) {
@@ -236,6 +238,7 @@ const sendToBack = (): void => {
   let currentMin = getMinZIndex()
 
   selected.forEach((el) => {
+    if (el.isLocked) return
     currentMin -= 1
     const targetElement = elements.value[el.id]
     if (targetElement) {
@@ -445,7 +448,7 @@ const sendToBack = (): void => {
         stroke: '#2980b9',
         strokeWidth: 2,
       }
-    })
+    }, true)
 
     // 添加示例圆形
     addElement({
@@ -460,7 +463,7 @@ const sendToBack = (): void => {
         stroke: '#c0392b',
         strokeWidth: 1,
       }
-    })
+    }, true)
 
     // 添加示例文本
     addElement({
@@ -480,7 +483,7 @@ const sendToBack = (): void => {
         color: '#2c3e50',
         fontWeight: 'normal'
       }
-    })
+    }, true)
   }
 
   // 导出
