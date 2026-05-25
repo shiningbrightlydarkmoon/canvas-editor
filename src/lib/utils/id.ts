@@ -6,7 +6,7 @@
 let idCounter = 0 // 静态计数器
 
 export const generateId = (): string => {
-  idCounter = (idCounter + 1) % 1000 // 循环防止溢出
+  idCounter += 1
   return `el_${Date.now()}_${idCounter}_${Math.random().toString(36).substring(2, 6)}`
 }
 
