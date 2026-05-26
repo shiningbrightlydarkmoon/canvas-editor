@@ -1,5 +1,6 @@
 <template>
-  <div ref="canvasContainer" class="canvas-container">
+  <div class="canvas-wrapper">
+    <canvas ref="canvasRef" class="pixi-canvas"></canvas>
     <TextEditOverlay
       v-if="editingElement"
       :element="editingElement"
@@ -9,6 +10,10 @@
       @commit="handleTextCommit"
       @cancel="editingElement = null"
     />
+    <div class="viewport-indicator">
+      <span class="zoom-label">{{ Math.round(displayZoom * 100) }}%</span>
+      <button class="reset-btn" @click="resetView" title="重置视图">⊡</button>
+    </div>
   </div>
 </template>
 
@@ -36,7 +41,7 @@ const emit = defineEmits<{
 
 // === PIXI 引用 ===
 
-const canvasContainer = ref<HTMLDivElement>()
+const canvasRef = ref<HTMLCanvasElement>()
 let app: PIXI.Application | null = null
 const elementContainers = new Map<string, PIXI.Container>()
 const editingElement = ref<CanvasElement | null>(null)
@@ -46,6 +51,7 @@ const editingElement = ref<CanvasElement | null>(null)
 let zoom = 1
 let panX = 0
 let panY = 0
+const displayZoom = ref(1)
 
 const HANDLE_SIZE = 8
 
@@ -61,26 +67,29 @@ const canvasToScreen = (cx: number, cy: number) => ({
   y: cy * zoom + panY,
 })
 
-// === PIXI 应用初始化 ===
+// === PIXI 初始化 ===
 
 const initPixi = async () => {
   await nextTick()
-  if (!canvasContainer.value) return
+  const canvas = canvasRef.value
+  if (!canvas) return
+
+  const parent = canvas.parentElement
+  if (!parent) return
+  const w = parent.clientWidth
+  const h = parent.clientHeight
 
   try {
     const pixiApp = new PIXI.Application()
     await pixiApp.init({
-      width: canvasContainer.value.clientWidth,
-      height: canvasContainer.value.clientHeight,
-      backgroundAlpha: 0,
+      canvas,
+      width: w,
+      height: h,
+      background: '#ffffff',
       antialias: true,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
-      preference: 'webgl',
     })
-
-    const container = canvasContainer.value
-    container.appendChild(pixiApp.canvas)
 
     app = pixiApp
 
@@ -88,14 +97,14 @@ const initPixi = async () => {
     renderAllElements()
 
     const resizeObserver = new ResizeObserver(() => {
-      if (app && app.renderer && container) {
-        app.renderer.resize(container.clientWidth, container.clientHeight)
+      if (app && app.renderer && parent) {
+        app.renderer.resize(parent.clientWidth, parent.clientHeight)
         app.stage.hitArea = new PIXI.Rectangle(0, 0, app.screen.width, app.screen.height)
       }
     })
-    resizeObserver.observe(container)
+    resizeObserver.observe(parent)
   } catch (error) {
-    console.error('PIXI 初始化失败:', error)
+    console.error('[PIXI] 初始化失败:', error)
   }
 }
 
@@ -139,7 +148,6 @@ const drawSelectionHandles = (container: PIXI.Container, el: CanvasElement) => {
     container.addChild(handle)
   })
 
-  // 旋转手柄
   const rh = new PIXI.Graphics()
   const rx = el.width / 2
   const ry = -24 / zoom
@@ -251,6 +259,8 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
 }
 
 const renderAllElements = () => {
+  if ((dragState.active && dragState.moved) || resizeState.active || rotateState.active) return
+
   const pixiApp = app
   if (!pixiApp || !pixiApp.renderer) return
 
@@ -318,7 +328,7 @@ let panStartOffset = { x: 0, y: 0 }
 interface DragTarget { id: string; startX: number; startY: number }
 
 const dragState = {
-  active: false, elementId: '', startCanvasX: 0, startCanvasY: 0,
+  active: false, moved: false, elementId: '', startCanvasX: 0, startCanvasY: 0,
   elementStartX: 0, elementStartY: 0, isMulti: false, targets: [] as DragTarget[],
 }
 
@@ -335,13 +345,127 @@ const boxSelectState = {
   active: false, startX: 0, startY: 0, graphics: null as PIXI.Graphics | null,
 }
 
+// 对齐辅助线
+const ALIGN_THRESHOLD = 5
+let guideGraphics: PIXI.Graphics | null = null
+let currentGuides: { orientation: 'v' | 'h'; position: number }[] = []
+
+const syncDisplayZoom = () => { displayZoom.value = zoom }
+
 const updateStageTransform = () => {
   if (!app) return
   app.stage.scale.set(zoom, zoom)
   app.stage.position.set(panX, panY)
 }
 
-// === 画布平移、缩放与框选 ===
+const resetView = () => {
+  zoom = 1; panX = 0; panY = 0
+  updateStageTransform()
+  syncDisplayZoom()
+}
+
+// === 对齐辅助线 ===
+
+const drawGuides = (guides: { orientation: 'v' | 'h'; position: number }[]) => {
+  if (!app) return
+  if (!guideGraphics) { guideGraphics = new PIXI.Graphics(); app.stage.addChild(guideGraphics) }
+  guideGraphics.clear()
+  guides.forEach((g) => {
+    if (g.orientation === 'v') {
+      guideGraphics!.moveTo(g.position, -panY / zoom)
+      guideGraphics!.lineTo(g.position, (-panY + app!.screen.height) / zoom)
+    } else {
+      guideGraphics!.moveTo(-panX / zoom, g.position)
+      guideGraphics!.lineTo((-panX + app!.screen.width) / zoom, g.position)
+    }
+  })
+  guideGraphics.stroke({ width: 1 / zoom, color: 0xe74c3c })
+}
+
+const clearGuides = () => { if (guideGraphics) guideGraphics.clear(); currentGuides = [] }
+
+const applyAlignSnap = (nx: number, ny: number, dragEl: CanvasElement, draggedIds: Set<string>): { x: number; y: number } => {
+  const guides: { orientation: 'v' | 'h'; position: number }[] = []
+  let snappedX = nx; let snappedY = ny
+
+  const others = props.elements.filter((e) => !draggedIds.has(e.id))
+  if (others.length === 0) return { x: nx, y: ny }
+
+  const dLeft = nx; const dRight = nx + dragEl.width; const dTop = ny; const dBottom = ny + dragEl.height
+  const dCX = nx + dragEl.width / 2; const dCY = ny + dragEl.height / 2
+  let bestDX = ALIGN_THRESHOLD + 1; let bestDY = ALIGN_THRESHOLD + 1
+
+  others.forEach((o) => {
+    const oLeft = o.x; const oRight = o.x + o.width; const oTop = o.y; const oBottom = o.y + o.height
+    const oCX = o.x + o.width / 2; const oCY = o.y + o.height / 2
+
+    const xChecks = [
+      { dv: dLeft, ov: oLeft, gp: oLeft }, { dv: dRight, ov: oRight, gp: oRight },
+      { dv: dCX, ov: oCX, gp: oCX }, { dv: dLeft, ov: oRight, gp: oRight }, { dv: dRight, ov: oLeft, gp: oLeft },
+    ]
+    xChecks.forEach((c) => {
+      const diff = Math.abs(c.dv - c.ov)
+      if (diff < bestDX) { bestDX = diff; snappedX = nx + (c.ov - c.dv); guides.push({ orientation: 'v', position: c.gp }) }
+    })
+
+    const yChecks = [
+      { dv: dTop, ov: oTop, gp: oTop }, { dv: dBottom, ov: oBottom, gp: oBottom },
+      { dv: dCY, ov: oCY, gp: oCY }, { dv: dTop, ov: oBottom, gp: oBottom }, { dv: dBottom, ov: oTop, gp: oTop },
+    ]
+    yChecks.forEach((c) => {
+      const diff = Math.abs(c.dv - c.ov)
+      if (diff < bestDY) { bestDY = diff; snappedY = ny + (c.ov - c.dv); guides.push({ orientation: 'h', position: c.gp }) }
+    })
+  })
+
+  if (guides.length > 0) { currentGuides = guides; drawGuides(guides) } else { clearGuides() }
+  return { x: snappedX, y: snappedY }
+}
+
+// === 交互提交 ===
+
+const commitInteraction = () => {
+  const store = useCanvasStore()
+
+  if (dragState.active) {
+    if (dragState.isMulti) {
+      dragState.targets.forEach((t) => {
+        const c = elementContainers.get(t.id)
+        if (c) store.updateElement(t.id, { x: c.x, y: c.y })
+      })
+    } else {
+      const c = elementContainers.get(dragState.elementId)
+      if (c) store.updateElement(dragState.elementId, { x: c.x, y: c.y })
+    }
+    dragState.active = false
+    dragState.moved = false
+  }
+
+  if (resizeState.active) {
+    const c = elementContainers.get(resizeState.elementId)
+    if (c) {
+      store.updateElement(resizeState.elementId, {
+        x: c.x, y: c.y,
+        width: resizeState.startW * c.scale.x,
+        height: resizeState.startH * c.scale.y,
+      })
+    }
+    resizeState.active = false
+  }
+
+  if (rotateState.active) {
+    const c = elementContainers.get(rotateState.elementId)
+    if (c) {
+      const deg = (c.rotation * 180) / Math.PI
+      store.updateElement(rotateState.elementId, { rotation: deg })
+    }
+    rotateState.active = false
+  }
+
+  clearGuides()
+}
+
+// === 画布交互 ===
 
 const setupCanvasInteraction = () => {
   if (!app) return
@@ -351,7 +475,6 @@ const setupCanvasInteraction = () => {
 
   const view = app.renderer.canvas
 
-  // 滚轮缩放
   view.addEventListener('wheel', (e: WheelEvent) => {
     e.preventDefault()
     const rect = view.getBoundingClientRect()
@@ -366,9 +489,9 @@ const setupCanvasInteraction = () => {
     panX += (worldAfter.x - worldBefore.x) * zoom
     panY += (worldAfter.y - worldBefore.y) * zoom
     updateStageTransform()
+    syncDisplayZoom()
   }, { passive: false })
 
-  // 空格键进入平移模式
   document.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.code === 'Space' && !spaceHeld) {
       e.preventDefault()
@@ -384,7 +507,6 @@ const setupCanvasInteraction = () => {
     }
   })
 
-  // 舞台按下 → 平移或框选
   app.stage.on('pointerdown', (event: PIXI.FederatedPointerEvent) => {
     const isMiddleButton = event.button === 1
 
@@ -397,20 +519,17 @@ const setupCanvasInteraction = () => {
       return
     }
 
-    // 框选：点击空白区域
     if (event.target === app!.stage) {
       const canvasPos = screenToCanvas(event.globalX, event.globalY)
       boxSelectState.active = true
       boxSelectState.startX = canvasPos.x
       boxSelectState.startY = canvasPos.y
-
       const rubber = new PIXI.Graphics()
       app!.stage.addChild(rubber)
       boxSelectState.graphics = rubber
     }
   })
 
-  // 舞台移动 → 平移/拖拽/缩放/旋转/框选
   app.stage.on('pointermove', (event: PIXI.FederatedPointerEvent) => {
     if (isPanning) {
       panX = panStartOffset.x + (event.globalX - panStart.x)
@@ -422,6 +541,7 @@ const setupCanvasInteraction = () => {
     const current = screenToCanvas(event.globalX, event.globalY)
 
     if (dragState.active) {
+      dragState.moved = true
       const deltaX = current.x - dragState.startCanvasX
       const deltaY = current.y - dragState.startCanvasY
 
@@ -432,12 +552,17 @@ const setupCanvasInteraction = () => {
         })
       } else {
         const c = elementContainers.get(dragState.elementId)
-        if (c) {
+        const dragEl = props.elements.find((e) => e.id === dragState.elementId)
+        if (c && dragEl) {
           let nx = dragState.elementStartX + deltaX
           let ny = dragState.elementStartY + deltaY
           if (event.shiftKey) {
             if (Math.abs(deltaX) > Math.abs(deltaY)) ny = dragState.elementStartY
             else nx = dragState.elementStartX
+          }
+          if (!event.shiftKey) {
+            const snapped = applyAlignSnap(nx, ny, dragEl, new Set([dragState.elementId]))
+            nx = snapped.x; ny = snapped.y
           }
           c.x = nx; c.y = ny
         }
@@ -447,7 +572,6 @@ const setupCanvasInteraction = () => {
     if (resizeState.active) {
       const dx = current.x - resizeState.startCanvasX
       const dy = current.y - resizeState.startCanvasY
-
       let { x, y, w, h } = { x: resizeState.startX, y: resizeState.startY, w: resizeState.startW, h: resizeState.startH }
       const hType = resizeState.handle
 
@@ -458,14 +582,10 @@ const setupCanvasInteraction = () => {
 
       if (event.shiftKey && resizeState.startW > 0 && resizeState.startH > 0) {
         const ratio = resizeState.startW / resizeState.startH
-        if (hType === 'nw' || hType === 'ne' || hType === 'sw' || hType === 'se') {
-          h = w / ratio
-        }
+        if (hType === 'nw' || hType === 'ne' || hType === 'sw' || hType === 'se') h = w / ratio
       }
 
-      w = Math.max(20, w)
-      h = Math.max(20, h)
-
+      w = Math.max(20, w); h = Math.max(20, h)
       const c = elementContainers.get(resizeState.elementId)
       if (c) {
         c.x = x; c.y = y
@@ -478,7 +598,6 @@ const setupCanvasInteraction = () => {
       const angle = Math.atan2(current.y - rotateState.centerY, current.x - rotateState.centerX)
       let deg = ((angle - rotateState.startAngle) * 180) / Math.PI
       if (event.shiftKey) deg = Math.round(deg / 15) * 15
-
       const c = elementContainers.get(rotateState.elementId)
       if (c) c.rotation = (deg * Math.PI) / 180
     }
@@ -488,7 +607,6 @@ const setupCanvasInteraction = () => {
       const y = Math.min(boxSelectState.startY, current.y)
       const w = Math.abs(current.x - boxSelectState.startX)
       const h = Math.abs(current.y - boxSelectState.startY)
-
       if (boxSelectState.graphics) {
         boxSelectState.graphics.clear()
         boxSelectState.graphics.rect(x, y, w, h)
@@ -498,78 +616,30 @@ const setupCanvasInteraction = () => {
     }
   })
 
-  // 舞台松开 → 提交所有交互结果
   app.stage.on('pointerup', (event: PIXI.FederatedPointerEvent) => {
-    if (isPanning) {
-      isPanning = false
-      if (app) app.renderer.canvas.style.cursor = spaceHeld ? 'grab' : ''
-      return
-    }
-
-    const store = useCanvasStore()
-
-    if (dragState.active) {
-      if (dragState.isMulti) {
-        dragState.targets.forEach((t) => {
-          const c = elementContainers.get(t.id)
-          if (c) store.updateElement(t.id, { x: c.x, y: c.y })
-        })
-      } else {
-        const c = elementContainers.get(dragState.elementId)
-        if (c) store.updateElement(dragState.elementId, { x: c.x, y: c.y })
-      }
-      dragState.active = false
-    }
-
-    if (resizeState.active) {
-      const c = elementContainers.get(resizeState.elementId)
-      if (c) {
-        store.updateElement(resizeState.elementId, {
-          x: c.x, y: c.y,
-          width: resizeState.startW * c.scale.x,
-          height: resizeState.startH * c.scale.y,
-        })
-      }
-      resizeState.active = false
-    }
-
-    if (rotateState.active) {
-      const c = elementContainers.get(rotateState.elementId)
-      if (c) {
-        const deg = (c.rotation * 180) / Math.PI
-        store.updateElement(rotateState.elementId, { rotation: deg })
-      }
-      rotateState.active = false
-    }
+    if (isPanning) { isPanning = false; if (app) app.renderer.canvas.style.cursor = spaceHeld ? 'grab' : ''; return }
+    commitInteraction()
 
     if (boxSelectState.active) {
       const rubber = boxSelectState.graphics
       if (rubber) { app?.stage.removeChild(rubber); rubber.destroy() }
-
       const current = screenToCanvas(event.globalX, event.globalY)
       const sx = Math.min(boxSelectState.startX, current.x)
       const sy = Math.min(boxSelectState.startY, current.y)
       const sw = Math.abs(current.x - boxSelectState.startX)
       const sh = Math.abs(current.y - boxSelectState.startY)
-
       if (sw > 3 || sh > 3) {
         const selected = props.elements.filter((el) =>
-          el.x < sx + sw && el.x + el.width > sx &&
-          el.y < sy + sh && el.y + el.height > sy,
-        )
+          el.x < sx + sw && el.x + el.width > sx && el.y < sy + sh && el.y + el.height > sy)
         emit('selection-change', selected)
-      } else {
-        emit('selection-change', [])
-      }
+      } else { emit('selection-change', []) }
       boxSelectState.active = false
     }
   })
 
   app.stage.on('pointerupoutside', () => {
     if (isPanning) { isPanning = false; if (app) app.renderer.canvas.style.cursor = spaceHeld ? 'grab' : '' }
-    dragState.active = false
-    resizeState.active = false
-    rotateState.active = false
+    if (dragState.active || resizeState.active || rotateState.active) commitInteraction()
     if (boxSelectState.active) {
       const rubber = boxSelectState.graphics
       if (rubber) { app?.stage.removeChild(rubber); rubber.destroy() }
@@ -598,47 +668,32 @@ const setupElementInteraction = () => {
       const isSelected = props.selectedIds.includes(id)
       const localPos = container.toLocal(event.global)
 
-      // 检测是否点击了手柄（仅选中状态有效）
       if (isSelected) {
         const handle = getHandleAt(el, localPos.x, localPos.y)
         if (handle === 'rotate') {
           const canvasPos = screenToCanvas(event.globalX, event.globalY)
-          const cx = el.x + el.width / 2
-          const cy = el.y + el.height / 2
-          rotateState.active = true
-          rotateState.elementId = id
-          rotateState.centerX = cx
-          rotateState.centerY = cy
+          const cx = el.x + el.width / 2; const cy = el.y + el.height / 2
+          rotateState.active = true; rotateState.elementId = id
+          rotateState.centerX = cx; rotateState.centerY = cy
           rotateState.startAngle = Math.atan2(canvasPos.y - cy, canvasPos.x - cx) - (el.rotation || 0) * Math.PI / 180
           return
         }
         if (handle) {
           const canvasPos = screenToCanvas(event.globalX, event.globalY)
-          resizeState.active = true
-          resizeState.elementId = id
-          resizeState.handle = handle
-          resizeState.startCanvasX = canvasPos.x
-          resizeState.startCanvasY = canvasPos.y
-          resizeState.startX = el.x
-          resizeState.startY = el.y
-          resizeState.startW = el.width
-          resizeState.startH = el.height
+          resizeState.active = true; resizeState.elementId = id; resizeState.handle = handle
+          resizeState.startCanvasX = canvasPos.x; resizeState.startCanvasY = canvasPos.y
+          resizeState.startX = el.x; resizeState.startY = el.y
+          resizeState.startW = el.width; resizeState.startH = el.height
           return
         }
       }
 
-      // 非手柄区域 → 选中并拖拽
       if (!isSelected && !event.shiftKey) {
         emit('selection-change', [el])
-        // 选中后直接开始拖拽，提升操作流畅度
         const canvasPos = screenToCanvas(event.globalX, event.globalY)
-        dragState.active = true
-        dragState.elementId = id
-        dragState.isMulti = false
-        dragState.startCanvasX = canvasPos.x
-        dragState.startCanvasY = canvasPos.y
-        dragState.elementStartX = el.x
-        dragState.elementStartY = el.y
+        dragState.active = true; dragState.elementId = id; dragState.isMulti = false
+        dragState.startCanvasX = canvasPos.x; dragState.startCanvasY = canvasPos.y
+        dragState.elementStartX = el.x; dragState.elementStartY = el.y
         return
       }
 
@@ -648,23 +703,17 @@ const setupElementInteraction = () => {
         return
       }
 
-      // 开始拖拽（已选中的元素）
       const canvasPos = screenToCanvas(event.globalX, event.globalY)
       const selectedEls = props.elements.filter((e) => props.selectedIds.includes(e.id))
       if (selectedEls.length === 0) selectedEls.push(el)
 
-      dragState.active = true
-      dragState.elementId = id
-      dragState.startCanvasX = canvasPos.x
-      dragState.startCanvasY = canvasPos.y
-
+      dragState.active = true; dragState.elementId = id
+      dragState.startCanvasX = canvasPos.x; dragState.startCanvasY = canvasPos.y
       if (selectedEls.length > 1 && props.selectedIds.includes(id)) {
         dragState.isMulti = true
         dragState.targets = selectedEls.map((sel) => ({ id: sel.id, startX: sel.x, startY: sel.y }))
       } else {
-        dragState.isMulti = false
-        dragState.elementStartX = el.x
-        dragState.elementStartY = el.y
+        dragState.isMulti = false; dragState.elementStartX = el.x; dragState.elementStartY = el.y
       }
     })
 
@@ -673,17 +722,13 @@ const setupElementInteraction = () => {
       if (el.type === 'text') editingElement.value = el
     })
 
-    // 手柄悬停光标反馈
     container.on('pointermove', (event: PIXI.FederatedPointerEvent) => {
       if (!props.selectedIds.includes(id)) return
       const localPos = container.toLocal(event.global)
       const h = getHandleAt(el, localPos.x, localPos.y)
       const cursors: Record<string, string> = {
-        nw: 'nwse-resize', se: 'nwse-resize',
-        ne: 'nesw-resize', sw: 'nesw-resize',
-        n: 'ns-resize', s: 'ns-resize',
-        e: 'ew-resize', w: 'ew-resize',
-        rotate: 'grab',
+        nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize',
+        n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', rotate: 'grab',
       }
       container.cursor = h ? cursors[h] : 'pointer'
     })
@@ -718,10 +763,52 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.canvas-container {
+.canvas-wrapper {
   width: 100%;
   height: 100%;
   background: #f8f9fa;
   overflow: hidden;
+  position: relative;
 }
+
+.pixi-canvas {
+  display: block;
+}
+
+.viewport-indicator {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  z-index: 50;
+}
+
+.zoom-label {
+  color: #495057;
+  font-weight: 500;
+  min-width: 40px;
+  text-align: center;
+}
+
+.reset-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid #dee2e6;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #495057;
+}
+.reset-btn:hover { background: #f8f9fa; }
 </style>
