@@ -189,6 +189,33 @@ const buildChanges = (): Record<string, unknown> => {
   return changes
 }
 
+// 切换到不同元素时，同步所有本地状态
+watch(
+  () => props.element.id,
+  () => {
+    localName.value = props.element.name || ''
+    localX.value = props.element.x
+    localY.value = props.element.y
+    localWidth.value = props.element.width
+    localHeight.value = props.element.height
+    localRotation.value = props.element.rotation || 0
+    localOpacity.value = props.element.opacity ?? 1
+    localFill.value = props.element.style.fill || '#3498db'
+    localStroke.value = props.element.style.stroke || '#000000'
+    localStrokeWidth.value = props.element.style.strokeWidth ?? 1
+    localCornerRadius.value = props.element.style.cornerRadius ?? 0
+    localFontSize.value = props.element.style.fontSize ?? 16
+    localFontFamily.value = props.element.style.fontFamily ?? 'Arial'
+    localColor.value = props.element.style.color ?? '#2c3e50'
+    localContent.value = props.element.content || ''
+    localImageUrl.value = props.element.imageUrl || ''
+    localLocked.value = props.element.isLocked ?? false
+    fontWeight.value = props.element.style.fontWeight ?? 'normal'
+    fontStyle.value = props.element.style.fontStyle ?? 'normal'
+    textDecoration.value = props.element.style.textDecoration ?? 'none'
+  },
+)
+
 // Emit changes on any modification
 watch(
   [

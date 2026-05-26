@@ -117,7 +117,8 @@ export const useCanvasStore = defineStore('canvas', () => {
       console.warn(`Element ${id} not found`)
       return false
     }
-    if (existingElement.isLocked) return false
+    // 只允许解锁操作通过，其他更新在锁定状态下拒绝
+    if (existingElement.isLocked && updates.isLocked !== false) return false
 
     // 记录操作前状态
     const prevState = deepClone(elements.value)

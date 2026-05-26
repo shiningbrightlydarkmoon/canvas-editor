@@ -25,6 +25,7 @@ export const useClipboardStore = defineStore('clipboard', () => {
       x: element.x + 20, // 粘贴时偏移，避免重叠
       y: element.y + 20,
       isSelected: false,
+      isLocked: false, // 粘贴出的新元素应默认解锁
       createdAt: Date.now(),
       updatedAt: Date.now()
     }))
