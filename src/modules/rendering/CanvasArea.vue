@@ -204,9 +204,19 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
 
     if (el.imageUrl) {
       try {
-        const sprite = PIXI.Sprite.from(el.imageUrl)
+        // 通过 Image 对象加载，PIXI v8 的 Assets 系统对 data URL 支持不稳定
+        const img = new Image()
+        const sprite = new PIXI.Sprite(PIXI.Texture.WHITE)
         sprite.width = el.width
         sprite.height = el.height
+
+        const onLoad = () => {
+          sprite.texture = PIXI.Texture.from(img)
+        }
+        img.onload = onLoad
+        img.onerror = onLoad
+        img.src = el.imageUrl
+        if (img.complete) onLoad()  // data URL 可能已同步加载完成
 
         if (el.filters && el.filters.length > 0) {
           const pixiFilters: PIXI.Filter[] = []
