@@ -162,8 +162,10 @@ const drawSelectionHandles = (container: PIXI.Container, el: CanvasElement) => {
 
 const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container => {
   const container = new PIXI.Container()
-  container.x = el.x
-  container.y = el.y
+  // pivot 设到中心，使旋转/缩放绕元素中心进行
+  container.pivot.set(el.width / 2, el.height / 2)
+  container.x = el.x + el.width / 2
+  container.y = el.y + el.height / 2
 
   const graphics = new PIXI.Graphics()
   const fillColor = hexToNumber(el.style.fill || '#ffffff')
@@ -431,11 +433,13 @@ const commitInteraction = () => {
     if (dragState.isMulti) {
       dragState.targets.forEach((t) => {
         const c = elementContainers.get(t.id)
-        if (c) store.updateElement(t.id, { x: c.x, y: c.y })
+        const el = props.elements.find((e) => e.id === t.id)
+        if (c && el) store.updateElement(t.id, { x: c.x - el.width / 2, y: c.y - el.height / 2 })
       })
     } else {
       const c = elementContainers.get(dragState.elementId)
-      if (c) store.updateElement(dragState.elementId, { x: c.x, y: c.y })
+      const el = props.elements.find((e) => e.id === dragState.elementId)
+      if (c && el) store.updateElement(dragState.elementId, { x: c.x - el.width / 2, y: c.y - el.height / 2 })
     }
     dragState.active = false
     dragState.moved = false
@@ -444,10 +448,11 @@ const commitInteraction = () => {
   if (resizeState.active) {
     const c = elementContainers.get(resizeState.elementId)
     if (c) {
+      const newW = resizeState.startW * c.scale.x
+      const newH = resizeState.startH * c.scale.y
       store.updateElement(resizeState.elementId, {
-        x: c.x, y: c.y,
-        width: resizeState.startW * c.scale.x,
-        height: resizeState.startH * c.scale.y,
+        x: c.x - newW / 2, y: c.y - newH / 2,
+        width: newW, height: newH,
       })
     }
     resizeState.active = false
@@ -548,7 +553,8 @@ const setupCanvasInteraction = () => {
       if (dragState.isMulti) {
         dragState.targets.forEach((t) => {
           const c = elementContainers.get(t.id)
-          if (c) { c.x = t.startX + deltaX; c.y = t.startY + deltaY }
+          const el = props.elements.find((e) => e.id === t.id)
+          if (c && el) { c.x = t.startX + deltaX + el.width / 2; c.y = t.startY + deltaY + el.height / 2 }
         })
       } else {
         const c = elementContainers.get(dragState.elementId)
@@ -564,7 +570,7 @@ const setupCanvasInteraction = () => {
             const snapped = applyAlignSnap(nx, ny, dragEl, new Set([dragState.elementId]))
             nx = snapped.x; ny = snapped.y
           }
-          c.x = nx; c.y = ny
+          c.x = nx + dragEl.width / 2; c.y = ny + dragEl.height / 2
         }
       }
     }
@@ -588,7 +594,7 @@ const setupCanvasInteraction = () => {
       w = Math.max(20, w); h = Math.max(20, h)
       const c = elementContainers.get(resizeState.elementId)
       if (c) {
-        c.x = x; c.y = y
+        c.x = x + w / 2; c.y = y + h / 2
         c.scale.x = w / resizeState.startW
         c.scale.y = h / resizeState.startH
       }
