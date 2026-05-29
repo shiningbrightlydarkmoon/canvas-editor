@@ -85,3 +85,83 @@
 **修复**：将拖拽/缩放/旋转的提交逻辑抽取为 `commitInteraction()` 函数，在 `pointerup` 和 `pointerupoutside` 中均调用。
 
 **文件**：[src/modules/rendering/CanvasArea.vue](../src/modules/rendering/CanvasArea.vue)
+
+---
+
+## 8. 圆形拉伸后仍为正圆
+
+**现象**：圆形元素无论怎么拖拽缩放手柄改变尺寸，始终显示为正圆，无法变成椭圆。
+
+**原因**：`renderElement` 中圆形绘制使用 `Math.min(el.width, el.height) / 2` 作为半径，强制取较短的边，导致即使元素宽高不同，绘制的半径也始终取较小值。
+
+**修复**：将 `g.circle(cx, cy, Math.min(w, h) / 2)` 替换为 `g.ellipse(cx, cy, w / 2, h / 2)`，使 x 和 y 方向各自使用独立的半径。
+
+**文件**：[src/modules/rendering/CanvasArea.vue](../src/modules/rendering/CanvasArea.vue)
+
+---
+
+## 9. 拖拽/缩放后属性面板不同步
+
+**现象**：拖拽或缩放元素松手后，属性面板中位置、尺寸的数值不更新，必须点击其他元素再点回来才能看到新值。
+
+**原因**：`ElementProperties.vue` 的同步逻辑只监听 `props.element.id`。拖拽/缩放提交后 store 更新了元素的 x/y/width/height，但 id 未变，watcher 不触发，本地 ref 保持旧值。
+
+**修复**：将同步逻辑抽取为 `syncFromProps()` 函数，watcher 改为深度监听 `() => props.element`，元素任何属性变化时自动同步。
+
+**文件**：[src/modules/ui/components/ElementProperties.vue](../src/modules/ui/components/ElementProperties.vue)
+
+---
+
+## 10. 属性面板每次输入产生一条历史记录
+
+**现象**：在属性面板的文本框中输入内容，每按一个键都会生成一条撤销记录。输入"Hello"产生 5 条历史，按 Ctrl+Z 只能回退一个字。
+
+**原因**：`ElementProperties.vue` 中 `watch` 监听了所有本地 ref，每次值变化立刻 emit → `canvasStore.updateElement` → `pushHistory`。没有做防抖或失焦提交。
+
+**修复**：采用与画布拖拽相同的策略——编辑时仅修改本地 ref，仅在 input/textarea 失焦（blur）或按 Enter 时才 emit 提交到 store，保证一次编辑产生一条历史记录。
+
+**文件**：[src/modules/ui/components/ElementProperties.vue](../src/modules/ui/components/ElementProperties.vue)
+
+---
+
+## 11. IndexedDB 连接未关闭（资源泄漏）
+
+**现象**：长时间使用后，IndexedDB 操作可能失败，因为浏览器对同时打开的数据库连接数有限制。
+
+**原因**：`storage.ts` 中 `saveToDB` / `loadFromDB` 每次调用 `openDB()` 都会创建新的数据库连接，但事务完成后从未调用 `db.close()` 释放连接。
+
+**修复**：在每次事务完成后（`onsuccess` 或 `onerror`）调用 `db.close()` 关闭连接。或改用单例模式，全局维护一个持久连接，应用退出时再关闭。
+
+**文件**：[src/lib/utils/storage.ts](../src/lib/utils/storage.ts)
+
+---
+
+## 12. 多选拖拽无对齐辅助线
+
+**现象**：选中多个元素一起拖拽时，不会出现对齐辅助线和位置吸附。单选拖拽时正常。
+
+**原因**：`pointermove` 中多选拖拽分支直接设置 `container.x/y`，没有调用 `applyAlignSnap`；单选分支则有对齐吸附逻辑。
+
+**修复**：在多选拖拽分支中，以主拖拽元素（`dragState.elementId`）为基准调用 `applyAlignSnap`，将吸附后的偏移量同步应用到所有被拖拽元素的容器。
+
+**文件**：[src/modules/rendering/CanvasArea.vue](../src/modules/rendering/CanvasArea.vue)
+
+---
+
+## 13. 死代码：generateRandomColor 未被使用
+
+**现象**：`id.ts` 中导出的 `generateRandomColor` 函数在整个项目中无任何引用。
+
+**修复**：如果未来不需要随机颜色功能，移除该函数，减少代码体积和维护负担。
+
+**文件**：[src/lib/utils/id.ts](../src/lib/utils/id.ts)
+
+---
+
+## 14. 死代码：currentGuides 仅赋值未读取
+
+**现象**：`CanvasArea.vue` 中 `currentGuides` 变量在 `applyAlignSnap` 中赋值、`clearGuides` 中清空，但从未被读取。
+
+**修复**：如果这是为未来功能预留的（如导出当前辅助线位置），保留但加上注释说明；否则移除相关代码。
+
+**文件**：[src/modules/rendering/CanvasArea.vue](../src/modules/rendering/CanvasArea.vue)
