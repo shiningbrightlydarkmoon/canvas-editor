@@ -121,7 +121,7 @@ const drawShape = (g: PIXI.Graphics, el: CanvasElement) => {
       else g.rect(0, 0, el.width, el.height)
       break
     case 'circle':
-      g.circle(el.width / 2, el.height / 2, Math.min(el.width, el.height) / 2)
+      g.ellipse(el.width / 2, el.height / 2, el.width / 2, el.height / 2)
       break
     case 'triangle':
       g.moveTo(el.width / 2, 0).lineTo(el.width, el.height).lineTo(0, el.height).closePath()
