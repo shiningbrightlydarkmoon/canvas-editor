@@ -368,6 +368,12 @@ const updateStageTransform = () => {
   if (!app) return
   app.stage.scale.set(zoom, zoom)
   app.stage.position.set(panX, panY)
+  app.stage.hitArea = new PIXI.Rectangle(
+    -panX / zoom,
+    -panY / zoom,
+    app.screen.width / zoom,
+    app.screen.height / zoom
+  )
 }
 
 const resetView = () => {
