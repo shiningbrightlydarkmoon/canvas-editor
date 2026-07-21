@@ -1,8 +1,6 @@
-// 应用状态管理
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { AppState } from '@/core/types'
-import { EventBus, CANVAS_EVENTS } from '@/core/events/EventBus'
 
 export const useAppStore = defineStore('app', () => {
   const currentTool = ref<AppState['currentTool']>('select')
@@ -13,17 +11,10 @@ export const useAppStore = defineStore('app', () => {
   const gridSize = ref(10)
 
   const setCurrentTool = (tool: AppState['currentTool']) => {
-    const oldTool = currentTool.value
-    // 切换工具时，强制重置所有交互状态
     isDrawing.value = false
     isDragging.value = false
     isResizing.value = false
     currentTool.value = tool
-
-    EventBus.emit(CANVAS_EVENTS.TOOL_CHANGED, {
-      oldTool,
-      newTool: tool
-    })
   }
 
   const setDrawingState = (drawing: boolean) => {
