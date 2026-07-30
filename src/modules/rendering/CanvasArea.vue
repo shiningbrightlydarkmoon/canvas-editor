@@ -44,6 +44,7 @@ const emit = defineEmits<{
 const canvasRef = ref<HTMLCanvasElement>()
 let app: PIXI.Application | null = null
 const elementContainers = new Map<string, PIXI.Container>()
+// const editState = reactive({ element: null as CanvasElement | null })
 const editingElement = ref<CanvasElement | null>(null)
 
 // === 视口状态 ===
@@ -361,6 +362,9 @@ const boxSelectState = {
 const ALIGN_THRESHOLD = 5
 let guideGraphics: PIXI.Graphics | null = null
 let currentGuides: { orientation: 'v' | 'h'; position: number }[] = []
+
+// 手动双击检测——PixiJS 的 pointerdblclick 在容器重建时不可靠
+let lastDblClickTime = 0
 
 const syncDisplayZoom = () => { displayZoom.value = zoom }
 
@@ -684,6 +688,21 @@ const setupElementInteraction = () => {
     container.removeAllListeners('pointermove')
 
     container.on('pointerdown', (event: PIXI.FederatedPointerEvent) => {
+      // 手动双击检测：PixiJS pointerdblclick 在容器重建后不可靠，改用时间戳
+      const now = Date.now()
+      if (now - lastDblClickTime < 300) {
+        console.log('触发双击事件', event)
+        lastDblClickTime = 0
+        if (el.type === 'text') {
+          setTimeout(() => {
+            editingElement.value = el
+          }, 0)
+          return
+        }
+        return
+      }
+      lastDblClickTime = now
+
       if (event.button === 1 || spaceHeld) return
       event.stopPropagation()
 
@@ -739,10 +758,6 @@ const setupElementInteraction = () => {
       }
     })
 
-    container.on('pointerdblclick', (event: PIXI.FederatedPointerEvent) => {
-      event.stopPropagation()
-      if (el.type === 'text') editingElement.value = el
-    })
 
     container.on('pointermove', (event: PIXI.FederatedPointerEvent) => {
       if (!props.selectedIds.includes(id)) return
