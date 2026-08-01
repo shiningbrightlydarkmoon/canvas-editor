@@ -44,7 +44,6 @@ const emit = defineEmits<{
 const canvasRef = ref<HTMLCanvasElement>()
 let app: PIXI.Application | null = null
 const elementContainers = new Map<string, PIXI.Container>()
-// const editState = reactive({ element: null as CanvasElement | null })
 const editingElement = ref<CanvasElement | null>(null)
 
 // === 视口状态 ===
@@ -109,12 +108,16 @@ const initPixi = async () => {
   }
 }
 
-// === 渲染 ===
-
+// 渲染
+// 工具函数，将色号转为PIXI可用的数字
 const hexToNumber = (hex: string): number => parseInt(hex.replace('#', '0x'))
 
+// 绘制形状
 const drawShape = (g: PIXI.Graphics, el: CanvasElement) => {
   const r = el.style.cornerRadius ?? 0
+  // const r = (el.style.cornerRadius !== null && el.style.cornerRadius !== undefined)
+  // ? el.style.cornerRadius
+  // : 0
 
   switch (el.type) {
     case 'rect':
@@ -133,12 +136,19 @@ const drawShape = (g: PIXI.Graphics, el: CanvasElement) => {
   }
 }
 
+// 绘制选中元素的手柄
 const drawSelectionHandles = (container: PIXI.Container, el: CanvasElement) => {
   const hs = HANDLE_SIZE / zoom
+  // 绘制八个角和边的手柄，左上nw，上中n，右上ne，左中w，右中e，左下sw，下中s，右下se
   const positions = [
-    { x: 0, y: 0 }, { x: el.width / 2, y: 0 }, { x: el.width, y: 0 },
-    { x: 0, y: el.height / 2 }, { x: el.width, y: el.height / 2 },
-    { x: 0, y: el.height }, { x: el.width / 2, y: el.height }, { x: el.width, y: el.height },
+    { x: 0, y: 0 },
+    { x: el.width / 2, y: 0 },
+    { x: el.width, y: 0 },
+    { x: 0, y: el.height / 2 },
+    { x: el.width, y: el.height / 2 },
+    { x: 0, y: el.height },
+    { x: el.width / 2, y: el.height },
+    { x: el.width, y: el.height },
   ]
 
   positions.forEach((pos) => {
@@ -161,7 +171,9 @@ const drawSelectionHandles = (container: PIXI.Container, el: CanvasElement) => {
   container.addChild(rh)
 }
 
+// 渲染单个元素
 const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container => {
+  // 创建容器
   const container = new PIXI.Container()
   // pivot 设到中心，使旋转/缩放绕元素中心进行
   container.pivot.set(el.width / 2, el.height / 2)
@@ -175,6 +187,8 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
   const isTransparent = el.style.fill === 'transparent'
   const alpha = el.opacity ?? 1
 
+  // 根据元素类型渲染
+
   if (el.type === 'text') {
     const textStyle = new PIXI.TextStyle({
       fontSize: el.style.fontSize ?? 16,
@@ -184,6 +198,7 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
       fontStyle: (el.style.fontStyle as any) ?? 'normal',
       wordWrap: true,
       wordWrapWidth: el.width,
+      breakWords: true,
     })
 
     const text = new PIXI.Text({ text: el.content || '文本', style: textStyle })
@@ -257,6 +272,7 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
   container.addChildAt(graphics, 0)
   if (el.rotation) container.rotation = (el.rotation * Math.PI) / 180
 
+  // 选中状态
   if (isSelected) {
     const border = new PIXI.Graphics()
     border.rect(-2 / zoom, -2 / zoom, el.width + 4 / zoom, el.height + 4 / zoom)
@@ -265,8 +281,9 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
     drawSelectionHandles(container, el)
   }
 
-  container.eventMode = 'static'
-  container.cursor = 'pointer'
+  // 交互设置
+  container.eventMode = 'static'  // 响应事件
+  container.cursor = 'pointer'    // 鼠标样式
 
   return container
 }
