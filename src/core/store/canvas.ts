@@ -99,6 +99,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     return newElement.id
   }
 
+  // 更新元素属性
   const updateElement = (id: string, updates: Partial<CanvasElement>): boolean => {
     const existingElement = elements.value[id]
     if (!existingElement) {
@@ -110,9 +111,9 @@ export const useCanvasStore = defineStore('canvas', () => {
     const prevState = deepClone(elements.value)
 
     const updatedElement: CanvasElement = {
-      ...existingElement,
-      ...updates,
-      updatedAt: Date.now()
+      ...existingElement,             // 复制所有旧属性
+      ...updates,                     // 覆盖为新属性
+      updatedAt: Date.now()           // 更新时间戳
     }
 
     elements.value[id] = updatedElement
@@ -127,6 +128,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     return true
   }
 
+  // 删除元素
   const deleteElement = (id: string): boolean => {
     const element = elements.value[id]
     if (!element) return false
