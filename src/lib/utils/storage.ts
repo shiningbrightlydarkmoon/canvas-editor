@@ -1,19 +1,21 @@
 import type { CanvasElement } from '@/core/types'
 
-const DB_NAME = 'CanvasEditorDB'
-const STORE_NAME = 'snapshots'
-const DB_VERSION = 1
-const DATA_KEY = 'current_canvas'
+const DB_NAME = 'CanvasEditorDB'                     // IndexedDB 数据库名称
+const STORE_NAME = 'snapshots'                       // IndexedDB 对象仓库名称
+const DB_VERSION = 1                                 // IndexedDB 数据库版本
+const DATA_KEY = 'current_canvas'                    // 数据存储的 Key，用于标识当前画布的状态
 
 /**
  * 打开数据库连接
  */
 const openDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
+    // 打开 IndexedDB 数据库连接
     const request = indexedDB.open(DB_NAME, DB_VERSION)
 
-    request.onerror = () => reject(request.error)
-    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)            // 连接失败时，返回错误
+    request.onsuccess = () => resolve(request.result)        // 连接成功时，返回数据库实例
+    // 处理首次创建/升级数据库的情况，创建对象仓库
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result
       if (!db.objectStoreNames.contains(STORE_NAME)) {
