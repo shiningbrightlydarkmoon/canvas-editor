@@ -12,6 +12,7 @@ export const useShortcuts = () => {
     // 统一处理 Ctrl (Windows) 和 Command (Mac)
     const isCtrl = e.ctrlKey || e.metaKey
 
+    // 获取按键的 key 值，并转换为小写，方便统一处理
     switch (e.key.toLowerCase()) {
       // 删除功能
       case 'delete':
