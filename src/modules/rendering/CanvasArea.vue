@@ -10,6 +10,16 @@
       @commit="handleTextCommit"
       @cancel="editingElement = null"
     />
+    <ChartDataOverlay
+      v-if="editingChartElement"
+      :element="editingChartElement"
+      :zoom="zoom"
+      :panX="panX"
+      :panY="panY"
+      @preview="handleChartPreview"
+      @commit="handleChartCommit"
+      @cancel="handleChartCancel"
+    />
     <div class="viewport-indicator">
       <span class="zoom-label">{{ Math.round(displayZoom * 100) }}%</span>
       <button class="reset-btn" @click="resetView" title="重置视图">⊡</button>
@@ -20,9 +30,11 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, nextTick, onUnmounted } from 'vue'
 import * as PIXI from 'pixi.js'
-import type { CanvasElement } from '@/core/types'
+import type { CanvasElement, ChartData } from '@/core/types'
 import { useCanvasStore } from '@/core/store/canvas'
 import TextEditOverlay from '@/modules/ui/components/TextEditOverlay.vue'
+import ChartDataOverlay from '@/modules/ui/components/ChartDataOverlay.vue'
+import { createChartRuntime, type ChartRuntime } from '@/core/charts'
 
 // 属性与事件
 
@@ -45,6 +57,8 @@ const canvasRef = ref<HTMLCanvasElement>()
 let app: PIXI.Application | null = null
 const elementContainers = new Map<string, PIXI.Container>()      // 存储每个元素的PIXI容器，key为元素ID
 const editingElement = ref<CanvasElement | null>(null)           // 当前正在编辑的文本元素
+const chartRuntimes = new Map<string, ChartRuntime>()              // 图表元素对应的 ECharts 运行时
+const editingChartElement = ref<CanvasElement | null>(null)       // 当前正在编辑数据的图表元素
 
 // === 视口状态 ===
 
@@ -189,7 +203,11 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
 
   // 根据元素类型渲染
 
-  if (el.type === 'text') {
+  if (el.type === 'chart') {
+    const runtime = createChartRuntime(el, el.width, el.height)
+    chartRuntimes.set(el.id, runtime)
+    container.addChild(runtime.sprite)
+  } else if (el.type === 'text') {
     const textStyle = new PIXI.TextStyle({
       fontSize: el.style.fontSize ?? 16,
       fontFamily: el.style.fontFamily ?? 'Arial',
@@ -315,6 +333,8 @@ const renderAllElements = () => {
   for (const [id, container] of elementContainers) {
     if (!currentIds.has(id)) {
       pixiApp.stage.removeChild(container)
+      chartRuntimes.get(id)?.destroy()
+      chartRuntimes.delete(id)
       container.destroy({ children: true })
       elementContainers.delete(id)
     }
@@ -325,6 +345,8 @@ const renderAllElements = () => {
     // 移除旧容器
     const existing = elementContainers.get(el.id)
     if (existing) {
+      chartRuntimes.get(el.id)?.destroy()
+      chartRuntimes.delete(el.id)
       pixiApp.stage.removeChild(existing)
       existing.destroy({ children: true })
     }
@@ -911,6 +933,12 @@ const setupElementInteraction = () => {
           }, 0)
           return
         }
+        if (el.type === 'chart') {
+          setTimeout(() => {
+            editingChartElement.value = el
+          }, 0)
+          return
+        }
         return
       }
       lastDblClickTime = now
@@ -1013,6 +1041,34 @@ const handleTextCommit = (content: string) => {
   }
 }
 
+// 图表数据编辑：输入中只更新运行时预览，关闭时再提交一次 Store。
+const handleChartPreview = (data: ChartData) => {
+  const element = editingChartElement.value
+  if (!element?.chart) return
+  const runtime = chartRuntimes.get(element.id)
+  runtime?.update({
+    ...element,
+    chart: { ...element.chart, data },
+  }, element.width, element.height)
+}
+
+const handleChartCommit = (data: ChartData) => {
+  const element = editingChartElement.value
+  if (!element?.chart) return
+  useCanvasStore().updateElement(element.id, {
+    chart: { ...element.chart, data },
+  })
+  editingChartElement.value = null
+}
+
+const handleChartCancel = () => {
+  const element = editingChartElement.value
+  if (element?.chart) {
+    chartRuntimes.get(element.id)?.update(element, element.width, element.height)
+  }
+  editingChartElement.value = null
+}
+
 // 监听器
 watch(
   () => [props.elements, props.selectedIds] as const,
@@ -1024,6 +1080,8 @@ watch(
 onMounted(() => { initPixi() })
 
 onUnmounted(() => {
+  chartRuntimes.forEach((runtime) => runtime.destroy())
+  chartRuntimes.clear()
   if (app) { app.destroy(true, { children: true, texture: true }); app = null }
   elementContainers.clear()
 })

@@ -5,8 +5,7 @@ import { generateId, deepClone, debounce } from '@/lib/utils/id'
 import { useClipboardStore } from './clipboard'
 import { useHistoryStore } from './history'
 import { saveToDB, loadFromDB } from '@/lib/utils/storage'
-
-
+import { createDefaultChartData } from '@/core/charts/normalizeData'
 
 // 辅助函数，把用户输入的元素数据 CreateElementInput 转换为完整的 CanvasElement 对象
 const createNewElement = (elementData: CreateElementInput): CanvasElement => {
@@ -20,33 +19,34 @@ const createNewElement = (elementData: CreateElementInput): CanvasElement => {
     width: elementData.width,
     height: elementData.height,
     style: elementData.style,
-    createdAt: now,                                     // 设置创建时间为当前时间
-    updatedAt: now,                                     // 设置更新时间为当前时间
+    createdAt: now, // 设置创建时间为当前时间
+    updatedAt: now, // 设置更新时间为当前时间
     rotation: elementData.rotation ?? 0,
     name: elementData.name,
     content: elementData.content,
     imageUrl: elementData.imageUrl,
+    chart: elementData.chart,            // 设置图表数据，如果元素类型是图表，则包含图表的配置和数据
     filters: elementData.filters,
     isSelected: false,
     zIndex: elementData.zIndex ?? 0,
     opacity: elementData.opacity ?? 1,
-    isLocked: elementData.isLocked ?? false
+    isLocked: elementData.isLocked ?? false,
   }
 
   return newElement
 }
 
 export const useCanvasStore = defineStore('canvas', () => {
-  const elements = ref<Record<string, CanvasElement>>({})         // 存储所有画布元素的对象，键为元素 ID，值为 CanvasElement 对象
-  const selectedIds = ref<string[]>([])                           // 存储当前选中的元素 ID 数组
-  const viewport = ref<ViewportState>({ zoom: 1, x: 0, y: 0 })    // 存储画布的视口状态，包括缩放比例和偏移量
-  const clipboardStore = useClipboardStore()                      // 引用剪贴板存储，用于处理复制、剪切和粘贴操作
-  const historyStore = useHistoryStore()                          // 引用历史记录存储，用于处理撤销和重做操作
+  const elements = ref<Record<string, CanvasElement>>({}) // 存储所有画布元素的对象，键为元素 ID，值为 CanvasElement 对象
+  const selectedIds = ref<string[]>([]) // 存储当前选中的元素 ID 数组
+  const viewport = ref<ViewportState>({ zoom: 1, x: 0, y: 0 }) // 存储画布的视口状态，包括缩放比例和偏移量
+  const clipboardStore = useClipboardStore() // 引用剪贴板存储，用于处理复制、剪切和粘贴操作
+  const historyStore = useHistoryStore() // 引用历史记录存储，用于处理撤销和重做操作
 
   // 计算属性，返回当前选中的元素对象数组，并按 zIndex 排序
   const selectedElements = computed((): CanvasElement[] => {
     const result: CanvasElement[] = []
-    selectedIds.value.forEach(id => {
+    selectedIds.value.forEach((id) => {
       const element = elements.value[id]
       if (element) {
         result.push(element)
@@ -69,42 +69,36 @@ export const useCanvasStore = defineStore('canvas', () => {
 
   // 返回所有元素的数组形式，方便遍历和操作
   const elementsArray = computed((): CanvasElement[] => {
-    return Object.values(elements.value).filter(element => element !== undefined)
+    return Object.values(elements.value).filter((element) => element !== undefined)
   })
-
 
   // 获取当前所有元素的最大 zIndex 值，如果没有元素则返回 0
   const getMaxZIndex = () => {
     const allElements = Object.values(elements.value)
     if (allElements.length === 0) return 0
-    return Math.max(...allElements.map(el => el.zIndex || 0))
+    return Math.max(...allElements.map((el) => el.zIndex || 0))
   }
 
   // 获取当前所有元素的最小 zIndex 值，如果没有元素则返回 0
   const getMinZIndex = () => {
     const allElements = Object.values(elements.value)
     if (allElements.length === 0) return 0
-    return Math.min(...allElements.map(el => el.zIndex || 0))
+    return Math.min(...allElements.map((el) => el.zIndex || 0))
   }
 
   // 添加新元素到画布，并返回新元素的 ID。可以选择是否跳过历史记录的保存。
   // 传入参数：元素数据（不完整）， 是否跳过历史记录保存（默认为 false）
   const addElement = (elementData: CreateElementInput, skipHistory = false): string => {
-    const prevState = skipHistory ? {} : deepClone(elements.value)      // 是否跳过历史记录保存，如果不跳过则保存当前状态的深拷贝
+    const prevState = skipHistory ? {} : deepClone(elements.value) // 是否跳过历史记录保存，如果不跳过则保存当前状态的深拷贝
     const nextZIndex = getMaxZIndex() + 1
     const newElement = createNewElement({
-    ...elementData,
-    zIndex: nextZIndex
-  })
+      ...elementData,
+      zIndex: nextZIndex,
+    })
     elements.value[newElement.id] = newElement
 
     if (!skipHistory) {
-      historyStore.pushHistory(
-        `添加${newElement.type}元素`,
-        prevState,
-        elements.value,
-        'add'
-      )
+      historyStore.pushHistory(`添加${newElement.type}元素`, prevState, elements.value, 'add')
     }
 
     return newElement.id
@@ -123,19 +117,14 @@ export const useCanvasStore = defineStore('canvas', () => {
     const prevState = deepClone(elements.value)
 
     const updatedElement: CanvasElement = {
-      ...existingElement,             // 复制所有旧属性
-      ...updates,                     // 覆盖为新属性
-      updatedAt: Date.now()           // 更新时间戳
+      ...existingElement, // 复制所有旧属性
+      ...updates, // 覆盖为新属性
+      updatedAt: Date.now(), // 更新时间戳
     }
 
     elements.value[id] = updatedElement
 
-    historyStore.pushHistory(
-      `更新${updatedElement.type}元素`,
-      prevState,
-      elements.value,
-      'update'
-    )
+    historyStore.pushHistory(`更新${updatedElement.type}元素`, prevState, elements.value, 'update')
 
     return true
   }
@@ -148,14 +137,9 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     const prevState = deepClone(elements.value)
     delete elements.value[id]
-    selectedIds.value = selectedIds.value.filter(selectedId => selectedId !== id)
+    selectedIds.value = selectedIds.value.filter((selectedId) => selectedId !== id)
 
-    historyStore.pushHistory(
-      `删除${element.type}元素`,
-      prevState,
-      elements.value,
-      'delete'
-    )
+    historyStore.pushHistory(`删除${element.type}元素`, prevState, elements.value, 'delete')
 
     return true
   }
@@ -166,9 +150,9 @@ export const useCanvasStore = defineStore('canvas', () => {
     if (selectedCount === 0) return 0
 
     const prevState = deepClone(elements.value)
-    const idsToDelete = [...selectedIds.value]                  // 复制选中列表，防止在循环中修改原数组导致问题
+    const idsToDelete = [...selectedIds.value] // 复制选中列表，防止在循环中修改原数组导致问题
 
-    idsToDelete.forEach(id => {
+    idsToDelete.forEach((id) => {
       const element = elements.value[id]
       if (element && !element.isLocked) {
         delete elements.value[id]
@@ -177,12 +161,7 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     selectedIds.value = []
 
-    historyStore.pushHistory(
-      `删除${selectedCount}个元素`,
-      prevState,
-      elements.value,
-      'delete'
-    )
+    historyStore.pushHistory(`删除${selectedCount}个元素`, prevState, elements.value, 'delete')
 
     return selectedCount
   }
@@ -198,7 +177,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     selected.forEach((el) => {
       if (el.isLocked) return
       currentMax += 1
-      const targetElement = elements.value[el.id]            // 获取当前元素的引用
+      const targetElement = elements.value[el.id] // 获取当前元素的引用
       if (targetElement) {
         targetElement.zIndex = currentMax
         targetElement.updatedAt = Date.now()
@@ -258,7 +237,7 @@ export const useCanvasStore = defineStore('canvas', () => {
 
   // 选择多个元素
   const selectMultiple = (ids: string[]): void => {
-    const validIds = ids.filter(id => elements.value[id])
+    const validIds = ids.filter((id) => elements.value[id])
     selectedIds.value = validIds
     updateElementsSelectionState()
   }
@@ -272,7 +251,7 @@ export const useCanvasStore = defineStore('canvas', () => {
   // 切换元素的选中状态，如果当前已选中则取消选中，否则添加到选中列表
   const toggleElementSelection = (id: string): void => {
     if (selectedIds.value.includes(id)) {
-      selectMultiple(selectedIds.value.filter(selectedId => selectedId !== id))
+      selectMultiple(selectedIds.value.filter((selectedId) => selectedId !== id))
     } else {
       selectElement(id, true)
     }
@@ -280,7 +259,7 @@ export const useCanvasStore = defineStore('canvas', () => {
 
   // 更新所有元素的 isSelected 状态，以确保它们与 selectedIds 保持一致
   const updateElementsSelectionState = (): void => {
-    Object.keys(elements.value).forEach(id => {
+    Object.keys(elements.value).forEach((id) => {
       const element = elements.value[id]
       if (element) {
         element.isSelected = selectedIds.value.includes(id)
@@ -320,10 +299,10 @@ export const useCanvasStore = defineStore('canvas', () => {
         `粘贴${pastedElements.length}个元素`,
         prevState,
         elements.value,
-        'add'
+        'add',
       )
 
-      selectMultiple(pastedElements.map(el => el.id))
+      selectMultiple(pastedElements.map((el) => el.id))
     }
 
     return pastedElements.length
@@ -376,10 +355,13 @@ export const useCanvasStore = defineStore('canvas', () => {
   }, 500)
 
   // 监听元素变化，深度监听，触发防抖保存
-  watch(elements, (newVal) => {
-    debouncedSave(newVal)
-  }, { deep: true })
-
+  watch(
+    elements,
+    (newVal) => {
+      debouncedSave(newVal)
+    },
+    { deep: true },
+  )
 
   const initializeWithSampleData = async (): Promise<void> => {
     console.log('尝试从 IndexedDB 加载数据...')
@@ -387,7 +369,23 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     if (saved && Object.keys(saved).length > 0) {
       console.log('加载到已保存的数据')
-      elements.value = saved
+      elements.value = Object.fromEntries(
+        Object.entries(saved).map(([id, element]) => [
+          id,
+          element.type === 'chart' && !element.chart
+            ? {
+                ...element,
+                chart: {
+                  chartType: 'bar' as const,
+                  data: createDefaultChartData(),
+                  xField: 'month',
+                  yFields: ['sales', 'profit'],
+                  title: element.name || '图表',
+                },
+              }
+            : element,
+        ]),
+      )
       selectedIds.value = []
       return
     } else {
@@ -396,52 +394,85 @@ export const useCanvasStore = defineStore('canvas', () => {
       selectedIds.value = []
     }
 
-    addElement({
-      type: 'rect',
-      name: '示例矩形',
-      x: 100,
-      y: 100,
-      width: 200,
-      height: 150,
-      style: {
-        fill: '#3498db',
-        stroke: '#2980b9',
-        strokeWidth: 2,
-      }
-    }, true)
+    addElement(
+      {
+        type: 'rect',
+        name: '示例矩形',
+        x: 100,
+        y: 100,
+        width: 200,
+        height: 150,
+        style: {
+          fill: '#3498db',
+          stroke: '#2980b9',
+          strokeWidth: 2,
+        },
+      },
+      true,
+    )
 
-    addElement({
-      type: 'circle',
-      name: '示例圆形',
-      x: 400,
-      y: 150,
-      width: 120,
-      height: 120,
-      style: {
-        fill: '#e74c3c',
-        stroke: '#c0392b',
-        strokeWidth: 1,
-      }
-    }, true)
+    addElement(
+      {
+        type: 'circle',
+        name: '示例圆形',
+        x: 400,
+        y: 150,
+        width: 120,
+        height: 120,
+        style: {
+          fill: '#e74c3c',
+          stroke: '#c0392b',
+          strokeWidth: 1,
+        },
+      },
+      true,
+    )
 
-    addElement({
-      type: 'text',
-      name: '示例文本',
-      x: 200,
-      y: 300,
-      width: 150,
-      height: 40,
-      content: 'Hello Canvas Editor',
-      style: {
-        fill: 'transparent',
-        stroke: 'transparent',
-        strokeWidth: 0,
-        fontSize: 16,
-        fontFamily: 'Arial',
-        color: '#2c3e50',
-        fontWeight: 'normal'
-      }
-    }, true)
+    addElement(
+      {
+        type: 'text',
+        name: '示例文本',
+        x: 200,
+        y: 300,
+        width: 150,
+        height: 40,
+        content: 'Hello Canvas Editor',
+        style: {
+          fill: 'transparent',
+          stroke: 'transparent',
+          strokeWidth: 0,
+          fontSize: 16,
+          fontFamily: 'Arial',
+          color: '#2c3e50',
+          fontWeight: 'normal',
+        },
+      },
+      true,
+    )
+
+    addElement(
+      {
+        type: 'chart',
+        name: '示例图表',
+        x: 100,
+        y: 400,
+        width: 420,
+        height: 260,
+        style: {
+          fill: '#ffffff',
+          stroke: 'transparent',
+          strokeWidth: 0,
+        },
+        chart: {
+          chartType: 'bar',
+          data: createDefaultChartData(),
+          xField: 'month',
+          yFields: ['sales', 'profit'],
+          title: '销售趋势',
+        },
+      },
+      true,
+    )
   }
 
   return {

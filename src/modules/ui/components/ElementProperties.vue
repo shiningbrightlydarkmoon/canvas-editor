@@ -106,6 +106,46 @@
       </div>
     </template>
 
+    <!-- 图表专属 -->
+    <template v-if="element.type === 'chart'">
+      <div class="property-group">
+        <label>图表类型</label>
+        <select v-model="localChartType" class="full-width">
+          <option v-for="option in chartTypeOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </div>
+      <div v-if="chartAdvice" class="chart-advice">
+        <div class="advice-title">推荐：{{ recommendedChartLabel }}</div>
+        <div class="advice-reason">{{ chartAdvice.reason }}</div>
+        <div v-for="warning in chartAdvice.warnings" :key="warning" class="advice-warning">
+          {{ warning }}
+        </div>
+      </div>
+      <div class="property-group">
+        <label>图表标题</label>
+        <input type="text" v-model="localChartTitle" class="full-width" placeholder="图表标题" />
+      </div>
+      <div class="property-group">
+        <label>分类字段</label>
+        <select v-model="localXField" class="full-width">
+          <option v-for="column in chartColumns" :key="column.key" :value="column.key">
+            {{ column.label }}
+          </option>
+        </select>
+      </div>
+      <div class="property-group">
+        <label>数值字段（逗号分隔）</label>
+        <input type="text" v-model="localYFieldsText" class="full-width" placeholder="sales, profit" />
+      </div>
+      <div class="property-group">
+        <label class="checkbox-label">
+          <input type="checkbox" v-model="localShowLegend" /> 显示图例
+        </label>
+      </div>
+    </template>
+
     <!-- 锁定 -->
     <div class="property-group">
       <label>
@@ -116,8 +156,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import type { CanvasElement, FontWeight, FontStyle } from '@/core/types'
+import { computed, ref, watch } from 'vue'
+import type { CanvasElement, ChartType, FontWeight, FontStyle } from '@/core/types'
+import { chartTypeOptions, getChartAdvice } from '@/core/charts'
 
 const props = defineProps<{ element: CanvasElement }>()
 
@@ -141,6 +182,18 @@ const localColor = ref(props.element.style.color ?? '#2c3e50')
 const localContent = ref(props.element.content || '')
 const localImageUrl = ref(props.element.imageUrl || '')
 const localLocked = ref(props.element.isLocked ?? false)
+const localChartType = ref<ChartType>(props.element.chart?.chartType ?? 'bar')
+const localChartTitle = ref(props.element.chart?.title ?? '')
+const localXField = ref(props.element.chart?.xField ?? props.element.chart?.data.columns[0]?.key ?? '')
+const localYFieldsText = ref((props.element.chart?.yFields ?? []).join(', '))
+const localShowLegend = ref(props.element.chart?.showLegend ?? true)
+
+const chartColumns = computed(() => props.element.chart?.data.columns ?? [])
+const chartAdvice = computed(() => (props.element.chart ? getChartAdvice(props.element.chart) : null))
+const recommendedChartLabel = computed(() => {
+  const recommended = chartAdvice.value?.recommendedType
+  return chartTypeOptions.find((option) => option.value === recommended)?.label ?? '柱状图'
+})
 
 // BIUS toggle states
 const fontWeight = ref<FontWeight>(props.element.style.fontWeight ?? 'normal')
@@ -186,6 +239,17 @@ const buildChanges = (): Record<string, unknown> => {
     changes.imageUrl = localImageUrl.value
   }
 
+  if (props.element.type === 'chart' && props.element.chart) {
+    changes.chart = {
+      ...props.element.chart,
+      chartType: localChartType.value,
+      title: localChartTitle.value,
+      xField: localXField.value,
+      yFields: localYFieldsText.value.split(',').map((field) => field.trim()).filter(Boolean),
+      showLegend: localShowLegend.value,
+    }
+  }
+
   return changes
 }
 
@@ -207,6 +271,11 @@ const syncFromProps = () => {
   localContent.value = props.element.content || ''
   localImageUrl.value = props.element.imageUrl || ''
   localLocked.value = props.element.isLocked ?? false
+  localChartType.value = props.element.chart?.chartType ?? 'bar'
+  localChartTitle.value = props.element.chart?.title ?? ''
+  localXField.value = props.element.chart?.xField ?? props.element.chart?.data.columns[0]?.key ?? ''
+  localYFieldsText.value = (props.element.chart?.yFields ?? []).join(', ')
+  localShowLegend.value = props.element.chart?.showLegend ?? true
   fontWeight.value = props.element.style.fontWeight ?? 'normal'
   fontStyle.value = props.element.style.fontStyle ?? 'normal'
   textDecoration.value = props.element.style.textDecoration ?? 'none'
@@ -225,6 +294,7 @@ watch(
     localName, localX, localY, localWidth, localHeight, localRotation, localOpacity,
     localFill, localStroke, localStrokeWidth, localCornerRadius,
     localFontSize, localFontFamily, localColor, localContent, localImageUrl, localLocked,
+    localChartType, localChartTitle, localXField, localYFieldsText, localShowLegend,
     fontWeight, fontStyle, textDecoration,
   ],
   () => { emit('change', buildChanges()) },
@@ -303,4 +373,29 @@ watch(
 .bius-btn.active { background: #3498db; color: #fff; border-color: #3498db; }
 
 input[type='checkbox'] { cursor: pointer; }
+
+.chart-advice {
+  margin: -4px 0 14px;
+  padding: 8px;
+  border: 1px solid #dbeafe;
+  border-radius: 4px;
+  background: #f8fbff;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.advice-title {
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.advice-reason {
+  margin-top: 3px;
+  color: #64748b;
+}
+
+.advice-warning {
+  margin-top: 4px;
+  color: #d97706;
+}
 </style>
