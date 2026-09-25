@@ -26,6 +26,7 @@
             <div class="shape-item" @click="addShape('circle')" title="圆形">○ 圆形</div>
             <div class="shape-item" @click="addShape('triangle')" title="三角形">△ 三角形</div>
             <div class="shape-item" @click="addShape('text')" title="文本">T 文本</div>
+            <div class="shape-item" @click="addShape('chart')" title="图表">▥ 图表</div>
             <div class="shape-item" @click="triggerImageUpload" title="图片">🖼 图片</div>
             <input ref="imageInput" type="file" accept="image/png,image/jpeg" hidden @change="handleImageUpload" />
           </div>
@@ -91,6 +92,7 @@ import CanvasArea from '@/modules/rendering/CanvasArea.vue'
 import FloatingToolbar from '@/modules/ui/components/FloatingToolbar.vue'
 import ElementProperties from '@/modules/ui/components/ElementProperties.vue'
 import type { CanvasElement } from '@/core/types'
+import { createDefaultChartData } from '@/core/charts'
 
 // 1. 初始化 Store
 const canvasStore = useCanvasStore()
@@ -119,14 +121,25 @@ const addShape = (type: CanvasElement['type']) => {
     name: `${type} ${elements.value.length + 1}`,
     x: 100 + elements.value.length * 50,
     y: 100 + elements.value.length * 50,
-    width: 100,
-    height: 100,
+    width: type === 'chart' ? 420 : 100,
+    height: type === 'chart' ? 260 : 100,
     style: {
       fill: '#3498db',
       stroke: '#000000',
       strokeWidth: 1,
       ...(type === 'text' ? { fontSize: 16, fontFamily: 'Arial', color: '#2c3e50' } : {}),
     },
+    ...(type === 'chart'
+      ? {
+          chart: {
+            chartType: 'bar' as const,
+            data: createDefaultChartData(),
+            xField: 'month',
+            yFields: ['sales', 'profit'],
+            title: '销售趋势',
+          },
+        }
+      : {}),
     content: type === 'text' ? '文本' : undefined,
   })
 }

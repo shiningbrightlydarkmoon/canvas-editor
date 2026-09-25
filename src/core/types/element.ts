@@ -3,7 +3,75 @@
 /**
  * 元素类型
  */
-export type ElementType = 'rect' | 'circle' | 'triangle' | 'text' | 'image'
+export type ElementType = 'rect' | 'circle' | 'triangle' | 'text' | 'image' | 'chart'
+
+/**
+ * 图表类型
+ * 这里保留 20+ 种常见类型，具体渲染能力由 chartRegistry 提供。
+ */
+export type ChartType =
+  | 'bar'
+  | 'horizontal-bar'
+  | 'stacked-bar'
+  | 'line'
+  | 'area'
+  | 'stacked-area'
+  | 'pie'
+  | 'doughnut'
+  | 'rose'
+  | 'scatter'
+  | 'bubble'
+  | 'radar'
+  | 'gauge'
+  | 'funnel'
+  | 'candlestick'
+  | 'boxplot'
+  | 'heatmap'
+  | 'treemap'
+  | 'sunburst'
+  | 'sankey'
+  | 'graph'
+
+/**
+ * 数据列类型
+ */
+export type ChartFieldType = 'string' | 'number'
+
+/**
+ * 图表数据列定义
+ */
+export interface ChartDataColumn {
+  key: string
+  label: string
+  type: ChartFieldType
+}
+
+/**
+ * 一行图表数据
+ */
+export type ChartDataRow = Record<string, string | number | null>
+
+/**
+ * 图表统一中间数据格式
+ */
+export interface ChartData {
+  columns: ChartDataColumn[]
+  rows: ChartDataRow[]
+}
+
+/**
+ * 图表配置
+ * 数据先内嵌在图表元素中，后续可替换为 datasetId 外置数据源。
+ */
+export interface ChartConfig {
+  chartType: ChartType
+  data: ChartData
+  xField?: string
+  yFields?: string[]
+  title?: string
+  smooth?: boolean
+  showLegend?: boolean
+}
 
 /**
  * 字体粗细
@@ -92,6 +160,7 @@ export interface CanvasElement {
   name?: string     // 元素显示名称 (图层面板用)
   content?: string  // 文本内容
   imageUrl?: string // 图片地址
+  chart?: ChartConfig // 图表配置和数据
 
   // 交互状态
   isSelected?: boolean // 是否被选中
