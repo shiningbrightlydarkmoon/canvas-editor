@@ -300,16 +300,6 @@
         </label>
       </div>
 
-      <div v-if="chartAdvice" class="chart-advice">
-        <div class="advice-title">
-          <ChartColumn :size="13" />
-          <span>推荐 {{ recommendedChartLabel }}</span>
-        </div>
-        <div class="advice-reason">{{ chartAdvice.reason }}</div>
-        <div v-for="warning in chartAdvice.warnings" :key="warning" class="advice-warning">
-          {{ warning }}
-        </div>
-      </div>
 
       <label class="stacked-field compact-field">
         <span>图表标题</span>
@@ -320,16 +310,60 @@
         <span>分类字段</span>
         <select v-model="localXField">
           <option v-for="column in chartColumns" :key="column.key" :value="column.key">
-            {{ column.label }}
+            {{ column.label || column.key }}
           </option>
         </select>
       </label>
 
       <label class="stacked-field compact-field">
-        <span>数值字段</span>
-        <input v-model="localYFieldsText" type="text" placeholder="sales, profit" />
-        <small>多个字段请使用逗号分隔</small>
+        <span>分类名称</span>
+        <input v-model="localXFieldLabel" type="text" placeholder="例如：月份、产品、地区" />
       </label>
+
+      <div class="chart-series-editor">
+        <div class="series-editor-header">
+          <span>数值字段</span>
+          <button class="series-add-button" type="button" @click="addChartSeries">
+            <Plus :size="12" />
+            <span>添加</span>
+          </button>
+        </div>
+
+        <div class="series-list">
+          <div v-for="column in chartNumericColumns" :key="column.key" class="series-row">
+            <label
+              class="series-visible"
+              :title="isChartSeriesVisible(column.key) ? '隐藏该系列' : '显示该系列'"
+            >
+              <input
+                type="checkbox"
+                :checked="isChartSeriesVisible(column.key)"
+                @change="toggleChartSeries(column.key, $event)"
+              />
+              <span class="series-check"></span>
+            </label>
+            <input
+              class="series-name-input"
+              type="text"
+              :value="column.label"
+              placeholder="字段名称"
+              @input="updateChartSeriesLabel(column.key, $event)"
+            />
+            <span class="series-key">{{ column.key }}</span>
+            <button
+              class="series-remove-button"
+              type="button"
+              title="删除该数值字段"
+              :disabled="chartNumericColumns.length <= 1"
+              @click="removeChartSeries(column.key)"
+            >
+              <Trash2 :size="12" />
+            </button>
+          </div>
+        </div>
+
+        <small>勾选决定是否显示；字段名称用于图例，原始字段键保持不变</small>
+      </div>
 
       <div class="data-tip">
         <Table2 :size="13" />
@@ -355,14 +389,41 @@ import {
   Triangle,
   Type,
   Unlock,
+  Trash2,
 } from 'lucide-vue-next'
-import type { CanvasElement, ChartType, FontStyle, FontWeight } from '@/core/types'
-import { chartTypeOptions, getChartAdvice } from '@/core/charts'
+import type { CanvasElement, ChartData, ChartType, FontStyle, FontWeight } from '@/core/types'
+import { chartTypeOptions, cloneChartData } from '@/core/charts'
 import { createTableConfig, normalizeTableConfig } from '@/core/tables'
 
 const props = defineProps<{ element: CanvasElement }>()
 
 const emit = defineEmits<{ change: [properties: Record<string, unknown>] }>()
+
+const localChartType = ref<ChartType>(props.element.chart?.chartType ?? 'bar')
+const localChartTitle = ref(props.element.chart?.title ?? '')
+const localChartData = ref<ChartData>(
+  cloneChartData(props.element.chart?.data ?? { columns: [], rows: [] }),
+)
+const getChartColumnLabel = (key: string, data = localChartData.value) => {
+  const column = data.columns.find((item) => item.key === key)
+  return column ? column.label : key
+}
+const localXField = ref(
+  props.element.chart?.xField ?? props.element.chart?.data.columns[0]?.key ?? '',
+)
+const localXFieldLabel = ref(getChartColumnLabel(localXField.value))
+const getChartYFields = (data: ChartData) => {
+  const existingKeys = new Set(data.columns.map((column) => column.key))
+  const configured = (props.element.chart?.yFields ?? []).filter((key) => existingKeys.has(key))
+  if (configured.length > 0) return configured
+  return data.columns
+    .filter((column) => column.type === 'number')
+    .map((column) => column.key)
+}
+const areStringArraysEqual = (left: string[], right: string[]) =>
+  left.length === right.length && left.every((value, index) => value === right[index])
+const localYFields = ref<string[]>(getChartYFields(localChartData.value))
+const localShowLegend = ref(props.element.chart?.showLegend ?? true)
 
 const localName = ref(props.element.name || '')
 const localX = ref(props.element.x)
@@ -381,29 +442,18 @@ const localColor = ref(props.element.style.color ?? '#2c3e50')
 const localContent = ref(props.element.content || '')
 const localImageUrl = ref(props.element.imageUrl || '')
 const localLocked = ref(props.element.isLocked ?? false)
-const localChartType = ref<ChartType>(props.element.chart?.chartType ?? 'bar')
-const localChartTitle = ref(props.element.chart?.title ?? '')
-const localXField = ref(
-  props.element.chart?.xField ?? props.element.chart?.data.columns[0]?.key ?? '',
-)
-const localYFieldsText = ref((props.element.chart?.yFields ?? []).join(', '))
-const localShowLegend = ref(props.element.chart?.showLegend ?? true)
 const localTableRows = ref(normalizeTableConfig(props.element.table).rows)
 const localTableColumns = ref(normalizeTableConfig(props.element.table).columns)
 const localTableHeaderRow = ref(normalizeTableConfig(props.element.table).headerRow ?? false)
 
-const chartColumns = computed(() => props.element.chart?.data.columns ?? [])
-const chartAdvice = computed(() =>
-  props.element.chart ? getChartAdvice(props.element.chart) : null,
+const chartColumns = computed(() => localChartData.value.columns)
+const chartNumericColumns = computed(() =>
+  localChartData.value.columns.filter((column) => column.type === 'number'),
 )
-const chartRowCount = computed(() => props.element.chart?.data.rows.length ?? 0)
+const chartRowCount = computed(() => localChartData.value.rows.length)
 const chartTypeLabel = computed(
   () => chartTypeOptions.find((option) => option.value === localChartType.value)?.label ?? '图表',
 )
-const recommendedChartLabel = computed(() => {
-  const recommended = chartAdvice.value?.recommendedType
-  return chartTypeOptions.find((option) => option.value === recommended)?.label ?? '柱状图'
-})
 
 const elementTypeLabel = computed(() => {
   const labels: Record<CanvasElement['type'], string> = {
@@ -490,15 +540,26 @@ const buildChanges = (): Record<string, unknown> => {
   }
 
   if (props.element.type === 'chart' && props.element.chart) {
+    const nextChartData = cloneChartData(localChartData.value)
+    const categoryColumn = nextChartData.columns.find(
+      (column) => column.key === localXField.value,
+    )
+    if (categoryColumn) categoryColumn.label = localXFieldLabel.value.trim()
+    const chartColumnKeys = new Set(nextChartData.columns.map((column) => column.key))
+    const visibleYFields = localYFields.value.filter((key) => chartColumnKeys.has(key))
+    const fallbackYField = nextChartData.columns.find((column) => column.type === 'number')?.key
     changes.chart = {
       ...props.element.chart,
+      data: nextChartData,
       chartType: localChartType.value,
       title: localChartTitle.value,
       xField: localXField.value,
-      yFields: localYFieldsText.value
-        .split(',')
-        .map((field) => field.trim())
-        .filter(Boolean),
+      yFields:
+        visibleYFields.length > 0
+          ? visibleYFields
+          : fallbackYField
+            ? [fallbackYField]
+            : [],
       showLegend: localShowLegend.value,
     }
   }
@@ -527,6 +588,59 @@ const buildChanges = (): Record<string, unknown> => {
   return changes
 }
 
+const isChartSeriesVisible = (key: string) => localYFields.value.includes(key)
+
+const updateChartSeriesLabel = (key: string, event: Event) => {
+  const column = localChartData.value.columns.find((item) => item.key === key)
+  if (!column) return
+  column.label = (event.target as HTMLInputElement).value
+  emit('change', buildChanges())
+}
+
+const toggleChartSeries = (key: string, event: Event) => {
+  const input = event.target as HTMLInputElement
+  if (input.checked) {
+    if (!localYFields.value.includes(key)) localYFields.value = [...localYFields.value, key]
+    return
+  }
+  if (localYFields.value.length <= 1) {
+    input.checked = true
+    return
+  }
+  localYFields.value = localYFields.value.filter((field) => field !== key)
+}
+
+const createChartSeriesKey = () => {
+  const usedKeys = new Set(localChartData.value.columns.map((column) => column.key))
+  let index = 1
+  while (usedKeys.has(`series${index}`)) index += 1
+  return `series${index}`
+}
+
+const addChartSeries = () => {
+  const key = createChartSeriesKey()
+  localChartData.value.columns.push({
+    key,
+    label: `数值 ${chartNumericColumns.value.length + 1}`,
+    type: 'number',
+  })
+  localChartData.value.rows.forEach((row) => {
+    row[key] = 0
+  })
+  localYFields.value = [...localYFields.value, key]
+}
+
+const removeChartSeries = (key: string) => {
+  if (chartNumericColumns.value.length <= 1) return
+  localChartData.value.columns = localChartData.value.columns.filter(
+    (column) => column.key !== key,
+  )
+  localChartData.value.rows.forEach((row) => {
+    delete row[key]
+  })
+  localYFields.value = localYFields.value.filter((field) => field !== key)
+}
+
 const syncFromProps = () => {
   localName.value = props.element.name || ''
   localX.value = props.element.x
@@ -547,8 +661,16 @@ const syncFromProps = () => {
   localLocked.value = props.element.isLocked ?? false
   localChartType.value = props.element.chart?.chartType ?? 'bar'
   localChartTitle.value = props.element.chart?.title ?? ''
+  const nextChartData = cloneChartData(
+    props.element.chart?.data ?? { columns: [], rows: [] },
+  )
+  localChartData.value = nextChartData
   localXField.value = props.element.chart?.xField ?? props.element.chart?.data.columns[0]?.key ?? ''
-  localYFieldsText.value = (props.element.chart?.yFields ?? []).join(', ')
+  localXFieldLabel.value = getChartColumnLabel(localXField.value, nextChartData)
+  const nextYFields = getChartYFields(nextChartData)
+  if (!areStringArraysEqual(localYFields.value, nextYFields)) {
+    localYFields.value = nextYFields
+  }
   localShowLegend.value = props.element.chart?.showLegend ?? true
   localTableRows.value = normalizeTableConfig(props.element.table).rows
   localTableColumns.value = normalizeTableConfig(props.element.table).columns
@@ -563,6 +685,10 @@ watch(
   () => syncFromProps(),
   { deep: true },
 )
+
+watch(localXField, (key) => {
+  localXFieldLabel.value = getChartColumnLabel(key)
+})
 
 watch(
   [
@@ -586,7 +712,8 @@ watch(
     localChartType,
     localChartTitle,
     localXField,
-    localYFieldsText,
+    localXFieldLabel,
+    localYFields,
     localShowLegend,
     localTableRows,
     localTableColumns,
@@ -1000,6 +1127,156 @@ watch(
   margin-bottom: 9px;
 }
 
+.chart-series-editor {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.series-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.series-add-button {
+  height: 25px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border: 1px solid #c8d8f9;
+  border-radius: 7px;
+  color: var(--accent);
+  background: #f7faff;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.series-add-button:hover {
+  border-color: var(--accent);
+  background: #edf3ff;
+}
+
+.series-list {
+  display: grid;
+  gap: 6px;
+}
+
+.series-row {
+  display: grid;
+  grid-template-areas:
+    'check name remove'
+    '. key .';
+  grid-template-columns: 20px minmax(0, 1fr) 26px;
+  align-items: center;
+  gap: 3px 6px;
+  padding: 7px 7px 6px;
+  border: 1px solid var(--field-line);
+  border-radius: 8px;
+  background: var(--field-bg);
+}
+
+.series-visible {
+  position: relative;
+  grid-area: check;
+  width: 17px;
+  height: 17px;
+  cursor: pointer;
+}
+
+.series-visible input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.series-check {
+  position: absolute;
+  inset: 0;
+  border: 1px solid #c7d0dd;
+  border-radius: 5px;
+  background: #ffffff;
+}
+
+.series-check::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  width: 4px;
+  height: 8px;
+  border-right: 2px solid #ffffff;
+  border-bottom: 2px solid #ffffff;
+  opacity: 0;
+  transform: rotate(45deg);
+}
+
+.series-visible input:checked + .series-check {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.series-visible input:checked + .series-check::after {
+  opacity: 1;
+}
+
+.series-name-input {
+  grid-area: name;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text-main);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+}
+
+.series-key {
+  grid-area: key;
+  overflow: hidden;
+  color: #a1aab8;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.series-remove-button {
+  grid-area: remove;
+  width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: #8792a4;
+  background: transparent;
+  cursor: pointer;
+}
+
+.series-remove-button:hover:not(:disabled) {
+  color: #dc3545;
+  background: #fff0f1;
+}
+
+.series-remove-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.chart-series-editor > small {
+  color: #9aa4b3;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .table-grid {
   margin-bottom: 9px;
 }
@@ -1115,33 +1392,5 @@ watch(
 
 .switch-control input:checked + .switch-track::after {
   transform: translateX(11px);
-}
-
-.chart-advice {
-  margin: 9px 0;
-  padding: 9px;
-  border: 1px solid #dce7fd;
-  border-radius: 8px;
-  background: #f6f9ff;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.advice-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #2f6fed;
-  font-weight: 600;
-}
-
-.advice-reason {
-  margin-top: 4px;
-  color: #6e7b8f;
-}
-
-.advice-warning {
-  margin-top: 4px;
-  color: #c17618;
 }
 </style>

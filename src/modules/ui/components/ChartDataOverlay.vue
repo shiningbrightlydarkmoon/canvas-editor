@@ -13,8 +13,19 @@
         <thead>
           <tr>
             <th class="row-index">#</th>
-            <th v-for="column in draft.columns" :key="column.key">
-              {{ column.label }}
+            <th
+              v-for="column in draft.columns"
+              :key="column.key"
+              :class="{ 'is-category': isCategoryColumn(column.key) }"
+            >
+              <input
+                v-model="column.label"
+                class="column-name-input"
+                type="text"
+                :aria-label="`${column.label} 字段名称`"
+                title="修改字段名称"
+                @input="emitPreview"
+              />
             </th>
             <th class="row-actions"></th>
           </tr>
@@ -22,7 +33,11 @@
         <tbody>
           <tr v-for="(row, rowIndex) in draft.rows" :key="rowIndex">
             <td class="row-index">{{ rowIndex + 1 }}</td>
-            <td v-for="column in draft.columns" :key="column.key">
+            <td
+              v-for="column in draft.columns"
+              :key="column.key"
+              :class="{ 'is-category': isCategoryColumn(column.key) }"
+            >
               <input
                 v-if="column.type === 'number'"
                 v-model.number="row[column.key]"
@@ -76,6 +91,12 @@ const emit = defineEmits<{
 }>()
 
 const draft = ref<ChartData>(cloneChartData(props.element.chart?.data || { columns: [], rows: [] }))
+
+const categoryFieldKey = computed(
+  () => props.element.chart?.xField ?? props.element.chart?.data.columns[0]?.key ?? '',
+)
+
+const isCategoryColumn = (key: string) => key === categoryFieldKey.value
 
 watch(
   () => props.element.id,
@@ -202,6 +223,34 @@ const removeRow = (index: number) => {
   background: #f8fafc;
   color: #6c757d;
   font-weight: 600;
+}
+
+.data-table th.is-category,
+.data-table td.is-category {
+  background: #f5f9ff;
+}
+
+.column-name-input {
+  width: 100%;
+  min-width: 72px;
+  padding: 3px 5px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: #526177;
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+}
+
+.column-name-input:hover {
+  border-color: #dbe4f1;
+  background: #ffffff;
+}
+
+.column-name-input:focus {
+  outline: none;
+  border-color: #3498db;
+  background: #ffffff;
 }
 
 .cell-input {
