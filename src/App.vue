@@ -41,9 +41,14 @@
         <div v-for="tool in toolItems" :key="tool.key" class="tool-slot">
           <button
             class="tool-button"
-            :class="{ active: tool.key === 'table' && isTablePickerOpen }"
+            :class="{
+              active:
+                (tool.key === 'table' && isTablePickerOpen) ||
+                (tool.key === 'chart' && isChartPickerOpen),
+            }"
             :title="tool.label"
             :data-table-picker-trigger="tool.key === 'table' ? '' : undefined"
+            :data-chart-picker-trigger="tool.key === 'chart' ? '' : undefined"
             @click="tool.action"
           >
             <component :is="tool.icon" :size="19" :stroke-width="1.8" />
@@ -52,6 +57,11 @@
             v-if="tool.key === 'table' && isTablePickerOpen"
             @select="handleTableInsert"
             @close="isTablePickerOpen = false"
+          />
+          <ChartTypePicker
+            v-if="tool.key === 'chart' && isChartPickerOpen"
+            @select="handleChartInsert"
+            @close="isChartPickerOpen = false"
           />
         </div>
       </nav>
@@ -152,8 +162,9 @@ import CanvasArea from '@/modules/rendering/CanvasArea.vue'
 import FloatingToolbar from '@/modules/ui/components/FloatingToolbar.vue'
 import ElementProperties from '@/modules/ui/components/ElementProperties.vue'
 import TableSizePicker from '@/modules/ui/components/TableSizePicker.vue'
-import type { CanvasElement } from '@/core/types'
-import { createDefaultChartData } from '@/core/charts'
+import ChartTypePicker from '@/modules/ui/components/ChartTypePicker.vue'
+import type { CanvasElement, ChartType } from '@/core/types'
+import { createChartSampleConfig, getChartDefinition } from '@/core/charts'
 import { createTableConfig, getTableDimensions } from '@/core/tables'
 
 // 1. 初始化 Store
@@ -183,25 +194,14 @@ const addShape = (type: CanvasElement['type']) => {
     name: `${type} ${elements.value.length + 1}`,
     x: 100 + elements.value.length * 50,
     y: 100 + elements.value.length * 50,
-    width: type === 'chart' ? 420 : 100,
-    height: type === 'chart' ? 260 : 100,
+    width: type === 'text' ? 160 : 100,
+    height: type === 'text' ? 48 : 100,
     style: {
       fill: '#2f6fed',
       stroke: '#d7deea',
       strokeWidth: 1,
       ...(type === 'text' ? { fontSize: 16, fontFamily: 'Arial', color: '#273449' } : {}),
     },
-    ...(type === 'chart'
-      ? {
-          chart: {
-            chartType: 'bar' as const,
-            data: createDefaultChartData(),
-            xField: 'month',
-            yFields: ['sales', 'profit'],
-            title: '销售趋势',
-          },
-        }
-      : {}),
     content: type === 'text' ? '文本' : undefined,
   })
 }
@@ -213,6 +213,7 @@ const triggerImageUpload = () => {
 }
 
 const isTablePickerOpen = ref(false)
+const isChartPickerOpen = ref(false)
 
 const handleTableInsert = (rows: number, columns: number) => {
   const dimensions = getTableDimensions(rows, columns)
@@ -236,6 +237,25 @@ const handleTableInsert = (rows: number, columns: number) => {
   isTablePickerOpen.value = false
 }
 
+const handleChartInsert = (chartType: ChartType) => {
+  const definition = getChartDefinition(chartType)
+  canvasStore.addElement({
+    type: 'chart',
+    name: definition.label,
+    x: 120 + elements.value.length * 30,
+    y: 120 + elements.value.length * 30,
+    width: 420,
+    height: 260,
+    style: {
+      fill: '#ffffff',
+      stroke: 'transparent',
+      strokeWidth: 0,
+    },
+    chart: createChartSampleConfig(chartType),
+  })
+  isChartPickerOpen.value = false
+}
+
 const toolItems = [
   { key: 'rect', label: '矩形', icon: Square, action: () => addShape('rect') },
   { key: 'circle', label: '圆形', icon: Circle, action: () => addShape('circle') },
@@ -247,9 +267,18 @@ const toolItems = [
     icon: Table2,
     action: () => {
       isTablePickerOpen.value = !isTablePickerOpen.value
+      isChartPickerOpen.value = false
     },
   },
-  { key: 'chart', label: '图表', icon: ChartColumn, action: () => addShape('chart') },
+  {
+    key: 'chart',
+    label: '图表',
+    icon: ChartColumn,
+    action: () => {
+      isChartPickerOpen.value = !isChartPickerOpen.value
+      isTablePickerOpen.value = false
+    },
+  },
   { key: 'image', label: '图片', icon: ImageIcon, action: triggerImageUpload },
 ]
 

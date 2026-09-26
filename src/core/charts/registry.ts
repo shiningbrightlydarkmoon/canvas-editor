@@ -16,7 +16,9 @@ const getYFields = (config: ChartConfig): string[] => {
   const configured = config.yFields?.filter(Boolean) ?? []
   if (configured.length > 0) return configured
   const numericFields = getNumericFields(config.data)
-  return numericFields.length > 0 ? numericFields : config.data.columns.slice(1).map((column) => column.key)
+  return numericFields.length > 0
+    ? numericFields
+    : config.data.columns.slice(1).map((column) => column.key)
 }
 
 const getValueField = (config: ChartConfig): string => getYFields(config)[0] || getXField(config)
@@ -29,7 +31,8 @@ const asNumber = (value: unknown): number => {
   return Number.isFinite(number) ? number : 0
 }
 
-const asLabel = (value: unknown): string => (value === null || value === undefined ? '' : String(value))
+const asLabel = (value: unknown): string =>
+  value === null || value === undefined ? '' : String(value)
 
 const getTitle = (config: ChartConfig) =>
   config.title
@@ -50,6 +53,21 @@ const getLegend = (config: ChartConfig) =>
         type: 'scroll' as const,
       }
 
+const getColumnLabel = (config: ChartConfig, key: string): string => {
+  const column = config.data.columns.find((item) => item.key === key)
+  return column ? column.label : key
+}
+
+const getCategoryAxisOptions = (config: ChartConfig, key: string) => {
+  const label = getColumnLabel(config, key)
+  return label.trim()
+    ? {
+        name: label,
+        nameLocation: 'middle' as const,
+      }
+    : {}
+}
+
 const cartesianBase = (config: ChartConfig): EChartsOption => ({
   title: getTitle(config),
   tooltip: { trigger: 'axis' },
@@ -58,7 +76,7 @@ const cartesianBase = (config: ChartConfig): EChartsOption => ({
     left: 48,
     right: 24,
     top: config.title ? 64 : 44,
-    bottom: 38,
+    bottom: 52,
     containLabel: true,
   },
 })
@@ -72,15 +90,28 @@ const buildCartesian = (
   const yFields = getYFields(config)
   const rows = getRows(config)
   const categories = rows.map((row) => asLabel(row[xField]))
+  const categoryAxisOptions = getCategoryAxisOptions(config, xField)
   const xAxis = options.horizontal
     ? { type: 'value' as const }
-    : { type: 'category' as const, data: categories, axisLabel: { hideOverlap: true } }
+    : {
+        type: 'category' as const,
+        ...categoryAxisOptions,
+        nameGap: 30,
+        data: categories,
+        axisLabel: { hideOverlap: true },
+      }
   const yAxis = options.horizontal
-    ? { type: 'category' as const, data: categories, axisLabel: { hideOverlap: true } }
+    ? {
+        type: 'category' as const,
+        ...categoryAxisOptions,
+        nameGap: 66,
+        data: categories,
+        axisLabel: { hideOverlap: true },
+      }
     : { type: 'value' as const }
 
   const series = yFields.map((field) => ({
-    name: config.data.columns.find((column) => column.key === field)?.label || field,
+    name: getColumnLabel(config, field),
     type: seriesType,
     data: rows.map((row) => asNumber(row[field])),
     ...(options.stacked ? { stack: 'total' } : {}),
@@ -97,7 +128,11 @@ const buildCartesian = (
   }
 }
 
-const buildPie = (config: ChartConfig, radius: string | [string, string], roseType?: 'radius'): EChartsOption => {
+const buildPie = (
+  config: ChartConfig,
+  radius: string | [string, string],
+  roseType?: 'radius',
+): EChartsOption => {
   const xField = getXField(config)
   const valueField = getValueField(config)
   const rows = getRows(config)
@@ -143,7 +178,10 @@ const buildScatter = (config: ChartConfig, bubble = false): EChartsOption => {
         ...(bubble
           ? {
               symbolSize: (value: unknown[]) => {
-                const row = rows.find((item) => asNumber(item[xField]) === value[0] && asNumber(item[yField]) === value[1])
+                const row = rows.find(
+                  (item) =>
+                    asNumber(item[xField]) === value[0] && asNumber(item[yField]) === value[1],
+                )
                 const size = row ? asNumber(row[sizeField]) : 0
                 return 10 + (size / maxSize) * 30
               },
@@ -171,7 +209,7 @@ const buildRadar = (config: ChartConfig): EChartsOption => {
       {
         type: 'radar',
         data: yFields.map((field) => ({
-          name: config.data.columns.find((column) => column.key === field)?.label || field,
+          name: getColumnLabel(config, field),
           value: rows.map((row) => asNumber(row[field])),
         })),
       },
@@ -274,7 +312,14 @@ const buildHeatmap = (config: ChartConfig): EChartsOption => {
     grid: { left: 60, right: 30, top: config.title ? 64 : 44, bottom: 50, containLabel: true },
     xAxis: { type: 'category', data: xValues },
     yAxis: { type: 'category', data: yValues },
-    visualMap: { min: 0, max: Math.max(...rows.map((row) => asNumber(row[valueField])), 1), calculable: true, orient: 'horizontal', left: 'center', bottom: 0 },
+    visualMap: {
+      min: 0,
+      max: Math.max(...rows.map((row) => asNumber(row[valueField])), 1),
+      calculable: true,
+      orient: 'horizontal',
+      left: 'center',
+      bottom: 0,
+    },
     series: [
       {
         type: 'heatmap',
@@ -313,7 +358,9 @@ const buildSankey = (config: ChartConfig, type: 'sankey' | 'graph'): EChartsOpti
   const targetField = yFields[0] || xField
   const valueField = yFields[1] || yFields[0] || xField
   const rows = getRows(config)
-  const nodeNames = [...new Set(rows.flatMap((row) => [asLabel(row[xField]), asLabel(row[targetField])]))]
+  const nodeNames = [
+    ...new Set(rows.flatMap((row) => [asLabel(row[xField]), asLabel(row[targetField])])),
+  ]
   const nodes = nodeNames.map((name) => ({ name }))
   const links = rows.map((row) => ({
     source: asLabel(row[xField]),
@@ -333,27 +380,134 @@ const buildSankey = (config: ChartConfig, type: 'sankey' | 'graph'): EChartsOpti
 }
 
 const chartDefinitions: Record<ChartType, ChartDefinition> = {
-  bar: { type: 'bar', label: '柱状图', description: '比较不同类目的数值大小', buildOption: (config) => buildCartesian(config, 'bar') },
-  'horizontal-bar': { type: 'horizontal-bar', label: '条形图', description: '适合类目较多、文字较长时比较数值', buildOption: (config) => buildCartesian(config, 'bar', { horizontal: true }) },
-  'stacked-bar': { type: 'stacked-bar', label: '堆叠柱状图', description: '观察总量以及各部分构成', buildOption: (config) => buildCartesian(config, 'bar', { stacked: true }) },
-  line: { type: 'line', label: '折线图', description: '观察数值随时间或顺序的变化趋势', buildOption: (config) => buildCartesian(config, 'line', { smooth: config.smooth ?? true }) },
-  area: { type: 'area', label: '面积图', description: '强调趋势和累计规模', buildOption: (config) => buildCartesian(config, 'line', { area: true, smooth: config.smooth ?? true }) },
-  'stacked-area': { type: 'stacked-area', label: '堆叠面积图', description: '观察多个系列随时间变化的构成', buildOption: (config) => buildCartesian(config, 'line', { area: true, stacked: true, smooth: config.smooth ?? true }) },
-  pie: { type: 'pie', label: '饼图', description: '展示组成部分占整体的比例', buildOption: (config) => buildPie(config, '60%') },
-  doughnut: { type: 'doughnut', label: '环形图', description: '强调占比并保留中心信息空间', buildOption: (config) => buildPie(config, ['40%', '70%']) },
-  rose: { type: 'rose', label: '玫瑰图', description: '展示分类数据的占比差异', buildOption: (config) => buildPie(config, '65%', 'radius') },
-  scatter: { type: 'scatter', label: '散点图', description: '观察两个数值字段之间的关系', buildOption: (config) => buildScatter(config) },
-  bubble: { type: 'bubble', label: '气泡图', description: '在散点图基础上编码第三个数值字段', buildOption: (config) => buildScatter(config, true) },
-  radar: { type: 'radar', label: '雷达图', description: '比较多维指标的表现', buildOption: buildRadar },
-  gauge: { type: 'gauge', label: '仪表盘', description: '展示单指标当前值', buildOption: buildGauge },
-  funnel: { type: 'funnel', label: '漏斗图', description: '展示流程各阶段的转化情况', buildOption: buildFunnel },
-  candlestick: { type: 'candlestick', label: 'K线图', description: '展示开高低收等金融数据', buildOption: buildCandlestick },
-  boxplot: { type: 'boxplot', label: '箱线图', description: '观察数据分布与异常值', buildOption: buildBoxplot },
-  heatmap: { type: 'heatmap', label: '热力图', description: '观察两个维度下的数值密度', buildOption: buildHeatmap },
-  treemap: { type: 'treemap', label: '矩形树图', description: '展示层级数据的占比', buildOption: (config) => buildHierarchy(config, 'treemap') },
-  sunburst: { type: 'sunburst', label: '旭日图', description: '展示层级结构和占比关系', buildOption: (config) => buildHierarchy(config, 'sunburst') },
-  sankey: { type: 'sankey', label: '桑基图', description: '展示节点之间的流向和流量', buildOption: (config) => buildSankey(config, 'sankey') },
-  graph: { type: 'graph', label: '关系图', description: '展示实体之间的网络关系', buildOption: (config) => buildSankey(config, 'graph') },
+  bar: {
+    type: 'bar',
+    label: '柱状图',
+    description: '比较不同类目的数值大小',
+    buildOption: (config) => buildCartesian(config, 'bar'),
+  },
+  'horizontal-bar': {
+    type: 'horizontal-bar',
+    label: '条形图',
+    description: '适合类目较多、文字较长时比较数值',
+    buildOption: (config) => buildCartesian(config, 'bar', { horizontal: true }),
+  },
+  'stacked-bar': {
+    type: 'stacked-bar',
+    label: '堆叠柱状图',
+    description: '观察总量以及各部分构成',
+    buildOption: (config) => buildCartesian(config, 'bar', { stacked: true }),
+  },
+  line: {
+    type: 'line',
+    label: '折线图',
+    description: '观察数值随时间或顺序的变化趋势',
+    buildOption: (config) => buildCartesian(config, 'line', { smooth: config.smooth ?? true }),
+  },
+  area: {
+    type: 'area',
+    label: '面积图',
+    description: '强调趋势和累计规模',
+    buildOption: (config) =>
+      buildCartesian(config, 'line', { area: true, smooth: config.smooth ?? true }),
+  },
+  'stacked-area': {
+    type: 'stacked-area',
+    label: '堆叠面积图',
+    description: '观察多个系列随时间变化的构成',
+    buildOption: (config) =>
+      buildCartesian(config, 'line', { area: true, stacked: true, smooth: config.smooth ?? true }),
+  },
+  pie: {
+    type: 'pie',
+    label: '饼图',
+    description: '展示组成部分占整体的比例',
+    buildOption: (config) => buildPie(config, '60%'),
+  },
+  doughnut: {
+    type: 'doughnut',
+    label: '环形图',
+    description: '强调占比并保留中心信息空间',
+    buildOption: (config) => buildPie(config, ['40%', '70%']),
+  },
+  rose: {
+    type: 'rose',
+    label: '玫瑰图',
+    description: '展示分类数据的占比差异',
+    buildOption: (config) => buildPie(config, '65%', 'radius'),
+  },
+  scatter: {
+    type: 'scatter',
+    label: '散点图',
+    description: '观察两个数值字段之间的关系',
+    buildOption: (config) => buildScatter(config),
+  },
+  bubble: {
+    type: 'bubble',
+    label: '气泡图',
+    description: '在散点图基础上编码第三个数值字段',
+    buildOption: (config) => buildScatter(config, true),
+  },
+  radar: {
+    type: 'radar',
+    label: '雷达图',
+    description: '比较多维指标的表现',
+    buildOption: buildRadar,
+  },
+  gauge: {
+    type: 'gauge',
+    label: '仪表盘',
+    description: '展示单指标当前值',
+    buildOption: buildGauge,
+  },
+  funnel: {
+    type: 'funnel',
+    label: '漏斗图',
+    description: '展示流程各阶段的转化情况',
+    buildOption: buildFunnel,
+  },
+  candlestick: {
+    type: 'candlestick',
+    label: 'K线图',
+    description: '展示开高低收等金融数据',
+    buildOption: buildCandlestick,
+  },
+  boxplot: {
+    type: 'boxplot',
+    label: '箱线图',
+    description: '观察数据分布与异常值',
+    buildOption: buildBoxplot,
+  },
+  heatmap: {
+    type: 'heatmap',
+    label: '热力图',
+    description: '观察两个维度下的数值密度',
+    buildOption: buildHeatmap,
+  },
+  treemap: {
+    type: 'treemap',
+    label: '矩形树图',
+    description: '展示层级数据的占比',
+    buildOption: (config) => buildHierarchy(config, 'treemap'),
+  },
+  sunburst: {
+    type: 'sunburst',
+    label: '旭日图',
+    description: '展示层级结构和占比关系',
+    buildOption: (config) => buildHierarchy(config, 'sunburst'),
+  },
+  sankey: {
+    type: 'sankey',
+    label: '桑基图',
+    description: '展示节点之间的流向和流量',
+    buildOption: (config) => buildSankey(config, 'sankey'),
+  },
+  graph: {
+    type: 'graph',
+    label: '关系图',
+    description: '展示实体之间的网络关系',
+    buildOption: (config) => buildSankey(config, 'graph'),
+  },
 }
 
 export const chartRegistry = new Map<ChartType, ChartDefinition>(
