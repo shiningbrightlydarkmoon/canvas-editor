@@ -3,7 +3,7 @@
 /**
  * 元素类型
  */
-export type ElementType = 'rect' | 'circle' | 'triangle' | 'text' | 'image' | 'chart'
+export type ElementType = 'rect' | 'circle' | 'triangle' | 'text' | 'image' | 'chart' | 'table'
 
 /**
  * 图表类型
@@ -74,6 +74,19 @@ export interface ChartConfig {
 }
 
 /**
+ * 表格配置
+ * cells 使用二维字符串数组直接内嵌在元素中，便于快照、撤销和持久化。
+ */
+export interface TableConfig {
+  rows: number
+  columns: number
+  cells: string[][]
+  headerRow?: boolean
+  columnWidths?: number[]
+  rowHeights?: number[]
+}
+
+/**
  * 字体粗细
  */
 export type FontWeight = 'normal' | 'bold' | 'lighter' | 'bolder' | number
@@ -98,7 +111,6 @@ export type StrokeLineCap = 'butt' | 'round' | 'square'
  */
 export type FilterType = 'grayscale' | 'blur' | 'brightness'
 
-
 // 子接口定义
 
 /**
@@ -115,14 +127,14 @@ export interface FilterConfig {
  */
 export interface ElementStyle {
   // --- 基础填充与描边 ---
-  fill: string        // 填充颜色 (Hex 或 rgba)
-  stroke: string      // 描边颜色
+  fill: string // 填充颜色 (Hex 或 rgba)
+  stroke: string // 描边颜色
   strokeWidth: number // 描边宽度
 
   // --- 文本专属样式 ---
   fontSize?: number
   fontFamily?: string
-  color?: string      // 文本颜色
+  color?: string // 文本颜色
   fontWeight?: FontWeight
   fontStyle?: FontStyle
   textDecoration?: TextDecoration
@@ -152,19 +164,20 @@ export interface CanvasElement {
 
   // 视觉属性
   style: ElementStyle
-  opacity?: number  // 整体透明度 (0-1)
-  zIndex?: number   // 层级 (数值越大越靠前)
+  opacity?: number // 整体透明度 (0-1)
+  zIndex?: number // 层级 (数值越大越靠前)
   filters?: FilterConfig[] // 滤镜列表
 
   // 内容属性
-  name?: string     // 元素显示名称 (图层面板用)
-  content?: string  // 文本内容
+  name?: string // 元素显示名称 (图层面板用)
+  content?: string // 文本内容
   imageUrl?: string // 图片地址
   chart?: ChartConfig // 图表配置和数据
+  table?: TableConfig // 表格配置和数据
 
   // 交互状态
   isSelected?: boolean // 是否被选中
-  isLocked?: boolean   // 是否锁定 (不可拖拽/编辑)
+  isLocked?: boolean // 是否锁定 (不可拖拽/编辑)
 
   // 系统元数据
   createdAt: number // 创建时间戳

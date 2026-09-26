@@ -6,6 +6,7 @@ import { useClipboardStore } from './clipboard'
 import { useHistoryStore } from './history'
 import { saveToDB, loadFromDB } from '@/lib/utils/storage'
 import { createDefaultChartData } from '@/core/charts/normalizeData'
+import { normalizeTableConfig } from '@/core/tables'
 
 // 辅助函数，把用户输入的元素数据 CreateElementInput 转换为完整的 CanvasElement 对象
 const createNewElement = (elementData: CreateElementInput): CanvasElement => {
@@ -25,7 +26,8 @@ const createNewElement = (elementData: CreateElementInput): CanvasElement => {
     name: elementData.name,
     content: elementData.content,
     imageUrl: elementData.imageUrl,
-    chart: elementData.chart,            // 设置图表数据，如果元素类型是图表，则包含图表的配置和数据
+    chart: elementData.chart, // 设置图表数据，如果元素类型是图表，则包含图表的配置和数据
+    table: elementData.table, // 设置表格数据，如果元素类型是表格，则包含行列和单元格内容
     filters: elementData.filters,
     isSelected: false,
     zIndex: elementData.zIndex ?? 0,
@@ -383,7 +385,12 @@ export const useCanvasStore = defineStore('canvas', () => {
                   title: element.name || '图表',
                 },
               }
-            : element,
+            : element.type === 'table' && !element.table
+              ? {
+                  ...element,
+                  table: normalizeTableConfig(),
+                }
+              : element,
         ]),
       )
       selectedIds.value = []

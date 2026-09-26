@@ -20,6 +20,26 @@
       @commit="handleChartCommit"
       @cancel="handleChartCancel"
     />
+    <TableEditOverlay
+      v-if="editingTableElement"
+      :element="editingTableElement"
+      :zoom="zoom"
+      :panX="panX"
+      :panY="panY"
+      :activeCell="editingTableCell"
+      @preview="handleTablePreview"
+      @commit="handleTableCommit"
+      @cancel="handleTableCancel"
+    />
+    <TableQuickActions
+      v-else-if="selectedTableElement"
+      :element="selectedTableElement"
+      :zoom="zoom"
+      :panX="panX"
+      :panY="panY"
+      @add-row="handleTableAddRow"
+      @add-column="handleTableAddColumn"
+    />
     <div class="viewport-indicator">
       <span class="zoom-label">{{ Math.round(displayZoom * 100) }}%</span>
       <button class="reset-btn" @click="resetView" title="重置视图">⊡</button>
@@ -28,13 +48,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick, onUnmounted } from 'vue'
+import { computed, ref, onMounted, watch, nextTick, onUnmounted } from 'vue'
 import * as PIXI from 'pixi.js'
-import type { CanvasElement, ChartData } from '@/core/types'
+import type { CanvasElement, ChartData, TableConfig } from '@/core/types'
 import { useCanvasStore } from '@/core/store/canvas'
 import TextEditOverlay from '@/modules/ui/components/TextEditOverlay.vue'
 import ChartDataOverlay from '@/modules/ui/components/ChartDataOverlay.vue'
+import TableEditOverlay from '@/modules/ui/components/TableEditOverlay.vue'
+import TableQuickActions from '@/modules/ui/components/TableQuickActions.vue'
 import { createChartRuntime, type ChartRuntime } from '@/core/charts'
+import {
+  appendTableColumn,
+  appendTableRow,
+  cloneTableConfig,
+  getTableColumnWeights,
+  getTableRowWeights,
+  normalizeTableConfig,
+} from '@/core/tables'
 
 // 属性与事件
 
@@ -55,10 +85,20 @@ const emit = defineEmits<{
 
 const canvasRef = ref<HTMLCanvasElement>()
 let app: PIXI.Application | null = null
-const elementContainers = new Map<string, PIXI.Container>()      // 存储每个元素的PIXI容器，key为元素ID
-const editingElement = ref<CanvasElement | null>(null)           // 当前正在编辑的文本元素
-const chartRuntimes = new Map<string, ChartRuntime>()              // 图表元素对应的 ECharts 运行时
-const editingChartElement = ref<CanvasElement | null>(null)       // 当前正在编辑数据的图表元素
+const elementContainers = new Map<string, PIXI.Container>() // 存储每个元素的PIXI容器，key为元素ID
+const editingElement = ref<CanvasElement | null>(null) // 当前正在编辑的文本元素
+const chartRuntimes = new Map<string, ChartRuntime>() // 图表元素对应的 ECharts 运行时
+const editingChartElement = ref<CanvasElement | null>(null) // 当前正在编辑数据的图表元素
+const editingTableElement = ref<CanvasElement | null>(null) // 当前正在编辑的表格元素
+const editingTableCell = ref<{ row: number; column: number } | null>(null)
+
+const selectedTableElement = computed(() => {
+  if (props.selectedIds.length !== 1) return null
+  const selectedId = props.selectedIds[0]
+  return (
+    props.elements.find((element) => element.id === selectedId && element.type === 'table') ?? null
+  )
+})
 
 // === 视口状态 ===
 
@@ -68,6 +108,8 @@ let panY = 0
 const displayZoom = ref(1)
 
 const HANDLE_SIZE = 8
+const COLUMN_RESIZE_CURSOR = `url("${import.meta.env.BASE_URL}cursors/table-col-resize.svg") 12 12, col-resize`
+const ROW_RESIZE_CURSOR = `url("${import.meta.env.BASE_URL}cursors/table-row-resize.svg") 12 12, row-resize`
 
 // 坐标变换
 // 将屏幕坐标转换为画布坐标（世界坐标）
@@ -142,7 +184,10 @@ const drawShape = (g: PIXI.Graphics, el: CanvasElement) => {
       g.ellipse(el.width / 2, el.height / 2, el.width / 2, el.height / 2)
       break
     case 'triangle':
-      g.moveTo(el.width / 2, 0).lineTo(el.width, el.height).lineTo(0, el.height).closePath()
+      g.moveTo(el.width / 2, 0)
+        .lineTo(el.width, el.height)
+        .lineTo(0, el.height)
+        .closePath()
       break
     case 'image':
       g.rect(0, 0, el.width, el.height)
@@ -185,6 +230,105 @@ const drawSelectionHandles = (container: PIXI.Container, el: CanvasElement) => {
   container.addChild(rh)
 }
 
+const truncateTableText = (value: string, maxWidth: number, fontSize: number): string => {
+  if (!value) return ''
+
+  const textWidth = (text: string) =>
+    [...text].reduce((width, character) => width + (character.charCodeAt(0) > 255 ? 1 : 0.58), 0) *
+    fontSize
+
+  if (textWidth(value) <= maxWidth) return value
+
+  const characters = [...value]
+  while (characters.length > 0 && textWidth(`${characters.join('')}…`) > maxWidth) {
+    characters.pop()
+  }
+  return characters.length > 0 ? `${characters.join('')}…` : ''
+}
+
+// 表格使用 Graphics 自绘网格，单元格文本作为独立 Text 层渲染
+// 这样表格仍然是一个普通元素容器，可直接复用拖拽、缩放、旋转和历史快照。
+const renderTable = (
+  container: PIXI.Container,
+  graphics: PIXI.Graphics,
+  el: CanvasElement,
+  alpha: number,
+  fillColor: number,
+  strokeColor: number,
+  strokeWidth: number,
+  isTransparent: boolean,
+) => {
+  const table = normalizeTableConfig(el.table)
+  const rows = Math.max(1, table.rows)
+  const columns = Math.max(1, table.columns)
+  const columnWeights = getTableColumnWeights(table)
+  const rowWeights = getTableRowWeights(table)
+  const columnWeightTotal = columnWeights.reduce((total, weight) => total + weight, 0)
+  const rowWeightTotal = rowWeights.reduce((total, weight) => total + weight, 0)
+  const columnWidths = columnWeights.map((weight) => (el.width * weight) / columnWeightTotal)
+  const rowHeights = rowWeights.map((weight) => (el.height * weight) / rowWeightTotal)
+  const columnOffsets = columnWidths.reduce<number[]>((offsets, width, index) => {
+    offsets.push(index === 0 ? 0 : offsets[index - 1]! + columnWidths[index - 1]!)
+    return offsets
+  }, [])
+  const rowOffsets = rowHeights.reduce<number[]>((offsets, height, index) => {
+    offsets.push(index === 0 ? 0 : offsets[index - 1]! + rowHeights[index - 1]!)
+    return offsets
+  }, [])
+  const borderWidth = strokeWidth > 0 && el.style.stroke !== 'transparent' ? strokeWidth : 1
+  const borderColor = el.style.stroke === 'transparent' ? 0xdfe5ed : strokeColor
+  const bodyColor = isTransparent ? 0xffffff : fillColor
+  const bodyAlpha = isTransparent ? 0.01 : alpha
+
+  graphics.clear()
+  graphics.rect(0, 0, el.width, el.height)
+  graphics.fill({ color: bodyColor, alpha: bodyAlpha })
+
+  if (table.headerRow && rows > 0) {
+    graphics.rect(0, 0, el.width, rowHeights[0] ?? el.height)
+    graphics.fill({ color: 0xf2f6fd, alpha })
+  }
+
+  for (let row = 1; row < rows; row++) {
+    graphics.moveTo(0, rowOffsets[row]!).lineTo(el.width, rowOffsets[row]!)
+  }
+  for (let column = 1; column < columns; column++) {
+    graphics.moveTo(columnOffsets[column]!, 0).lineTo(columnOffsets[column]!, el.height)
+  }
+  graphics.stroke({ width: borderWidth, color: borderColor, alpha })
+  graphics.rect(0, 0, el.width, el.height)
+  graphics.stroke({ width: borderWidth, color: borderColor, alpha })
+  container.addChild(graphics)
+
+  const fontFamily = el.style.fontFamily ?? 'Arial'
+  const color = el.style.color ?? '#273449'
+
+  table.cells.forEach((row, rowIndex) => {
+    const rowHeight = rowHeights[rowIndex] ?? 0
+    const fontSize = Math.max(8, Math.min(el.style.fontSize ?? 12, rowHeight * 0.46))
+    row.forEach((value, columnIndex) => {
+      if (!value) return
+
+      const columnWidth = columnWidths[columnIndex] ?? 0
+      const isHeader = Boolean(table.headerRow && rowIndex === 0)
+      const label = new PIXI.Text({
+        text: truncateTableText(String(value), Math.max(0, columnWidth - 14), fontSize),
+        style: new PIXI.TextStyle({
+          fontSize,
+          fontFamily,
+          fill: color,
+          fontWeight: isHeader ? '600' : ((el.style.fontWeight as any) ?? 'normal'),
+          fontStyle: el.style.fontStyle ?? 'normal',
+        }),
+      })
+      label.x = (columnOffsets[columnIndex] ?? 0) + 7
+      label.y = (rowOffsets[rowIndex] ?? 0) + Math.max(2, (rowHeight - label.height) / 2)
+      label.alpha = alpha
+      container.addChild(label)
+    })
+  })
+}
+
 // 渲染单个元素
 const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container => {
   // 创建容器
@@ -203,7 +347,9 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
 
   // 根据元素类型渲染
 
-  if (el.type === 'chart') {
+  if (el.type === 'table') {
+    renderTable(container, graphics, el, alpha, fillColor, strokeColor, strokeWidth, isTransparent)
+  } else if (el.type === 'chart') {
     const runtime = createChartRuntime(el, el.width, el.height)
     chartRuntimes.set(el.id, runtime)
     container.addChild(runtime.sprite)
@@ -225,7 +371,7 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
     graphics.rect(0, 0, el.width, el.height)
     graphics.fill({
       color: isTransparent ? 0xffffff : fillColor,
-      alpha: isTransparent ? 0.01 : alpha
+      alpha: isTransparent ? 0.01 : alpha,
     })
 
     const decor = el.style.textDecoration
@@ -249,13 +395,12 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
         sprite.height = el.height
 
         const onLoad = () => {
-          sprite.texture = PIXI.Texture.from(img)  // v8: 从 Image 创建纹理
+          sprite.texture = PIXI.Texture.from(img) // v8: 从 Image 创建纹理
         }
         img.onload = onLoad
         img.onerror = onLoad
         img.src = el.imageUrl
-        if (img.complete) onLoad()  // data URL 可能已同步加载完成
-
+        if (img.complete) onLoad() // data URL 可能已同步加载完成
 
         // 滤镜（灰度/模糊/亮度），暂未在UI界面使用，但是代码有设定默认值
         if (el.filters && el.filters.length > 0) {
@@ -265,10 +410,26 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
               const cf = new PIXI.ColorMatrixFilter()
               const s = f.value
               cf.matrix = [
-                0.299 * s + (1 - s), 0.587 * s, 0.114 * s, 0, 0,
-                0.299 * s, 0.587 * s + (1 - s), 0.114 * s, 0, 0,
-                0.299 * s, 0.587 * s, 0.114 * s + (1 - s), 0, 0,
-                0, 0, 0, 1, 0
+                0.299 * s + (1 - s),
+                0.587 * s,
+                0.114 * s,
+                0,
+                0,
+                0.299 * s,
+                0.587 * s + (1 - s),
+                0.114 * s,
+                0,
+                0,
+                0.299 * s,
+                0.587 * s,
+                0.114 * s + (1 - s),
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
               ]
               pixiFilters.push(cf)
             } else if (f.type === 'blur') {
@@ -278,12 +439,7 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
             } else if (f.type === 'brightness') {
               const cf = new PIXI.ColorMatrixFilter()
               const b = f.value
-              cf.matrix = [
-                b, 0, 0, 0, 0,
-                0, b, 0, 0, 0,
-                0, 0, b, 0, 0,
-                0, 0, 0, 1, 0
-              ]
+              cf.matrix = [b, 0, 0, 0, 0, 0, b, 0, 0, 0, 0, 0, b, 0, 0, 0, 0, 0, 1, 0]
               pixiFilters.push(cf)
             }
           })
@@ -297,7 +453,8 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
   } else {
     drawShape(graphics, el)
     if (!isTransparent) graphics.fill({ color: fillColor, alpha })
-    if (strokeWidth > 0 && el.style.stroke !== 'transparent') graphics.stroke({ width: strokeWidth, color: strokeColor })
+    if (strokeWidth > 0 && el.style.stroke !== 'transparent')
+      graphics.stroke({ width: strokeWidth, color: strokeColor })
   }
 
   container.addChildAt(graphics, 0)
@@ -313,17 +470,22 @@ const renderElement = (el: CanvasElement, isSelected: boolean): PIXI.Container =
   }
 
   // 交互设置
-  container.eventMode = 'static'  // 响应事件
-  container.cursor = 'pointer'    // 鼠标样式
+  container.eventMode = 'static' // 响应事件
+  container.cursor = 'pointer' // 鼠标样式
 
   return container
 }
 
-
 // 渲染所有元素
 const renderAllElements = () => {
   // 交互中不渲染，防止冲突
-  if ((dragState.active && dragState.moved) || resizeState.active || rotateState.active) return
+  if (
+    (dragState.active && dragState.moved) ||
+    resizeState.active ||
+    rotateState.active ||
+    tableResizeState.active
+  )
+    return
 
   const pixiApp = app
   if (!pixiApp || !pixiApp.renderer) return
@@ -376,49 +538,172 @@ const getHandleAt = (el: CanvasElement, localX: number, localY: number): HandleT
   const hs = HANDLE_SIZE / zoom
   // 八个手柄的中心点坐标
   const checks: [HandleType, number, number][] = [
-    ['nw', 0, 0], ['n', el.width / 2, 0], ['ne', el.width, 0],
-    ['w', 0, el.height / 2], ['e', el.width, el.height / 2],
-    ['sw', 0, el.height], ['s', el.width / 2, el.height], ['se', el.width, el.height],
+    ['nw', 0, 0],
+    ['n', el.width / 2, 0],
+    ['ne', el.width, 0],
+    ['w', 0, el.height / 2],
+    ['e', el.width, el.height / 2],
+    ['sw', 0, el.height],
+    ['s', el.width / 2, el.height],
+    ['se', el.width, el.height],
   ]
 
   for (const [type, hx, hy] of checks) {
     if (Math.abs(localX - hx) < hs && Math.abs(localY - hy) < hs) return type
   }
 
-  if (Math.abs(localX - el.width / 2) < hs + 2 / zoom && Math.abs(localY - (-24 / zoom)) < hs + 2 / zoom) return 'rotate'
+  if (
+    Math.abs(localX - el.width / 2) < hs + 2 / zoom &&
+    Math.abs(localY - -24 / zoom) < hs + 2 / zoom
+  )
+    return 'rotate'
 
   return null
+}
+
+const getTableTrackSizes = (element: CanvasElement) => {
+  const table = normalizeTableConfig(element.table)
+  const columnWeights = getTableColumnWeights(table)
+  const rowWeights = getTableRowWeights(table)
+  const columnWeightTotal = columnWeights.reduce((total, weight) => total + weight, 0)
+  const rowWeightTotal = rowWeights.reduce((total, weight) => total + weight, 0)
+
+  return {
+    table,
+    columnWidths: columnWeights.map((weight) => (element.width * weight) / columnWeightTotal),
+    rowHeights: rowWeights.map((weight) => (element.height * weight) / rowWeightTotal),
+  }
+}
+
+const getTableResizeHandleAt = (
+  element: CanvasElement,
+  localX: number,
+  localY: number,
+  tolerance: number,
+): { kind: TableResizeKind; boundaryIndex: number } | null => {
+  const { columnWidths, rowHeights } = getTableTrackSizes(element)
+  let bestHandle: { kind: TableResizeKind; boundaryIndex: number } | null = null
+  let bestDistance = tolerance
+
+  let offsetX = 0
+  for (let index = 1; index < columnWidths.length; index++) {
+    offsetX += columnWidths[index - 1] ?? 0
+    const distance = Math.abs(localX - offsetX)
+    if (localY >= 0 && localY <= element.height && distance <= bestDistance) {
+      bestDistance = distance
+      bestHandle = { kind: 'column', boundaryIndex: index }
+    }
+  }
+
+  let offsetY = 0
+  for (let index = 1; index < rowHeights.length; index++) {
+    offsetY += rowHeights[index - 1] ?? 0
+    const distance = Math.abs(localY - offsetY)
+    if (localX >= 0 && localX <= element.width && distance <= bestDistance) {
+      bestDistance = distance
+      bestHandle = { kind: 'row', boundaryIndex: index }
+    }
+  }
+
+  return bestHandle
+}
+
+const getTableCellAt = (
+  element: CanvasElement,
+  localX: number,
+  localY: number,
+): { row: number; column: number } => {
+  const { columnWidths, rowHeights } = getTableTrackSizes(element)
+  let row = 0
+  let column = 0
+  let offsetY = 0
+  let offsetX = 0
+
+  for (let index = 0; index < rowHeights.length; index++) {
+    offsetY += rowHeights[index] ?? 0
+    if (localY < offsetY) {
+      row = index
+      break
+    }
+    row = index
+  }
+
+  for (let index = 0; index < columnWidths.length; index++) {
+    offsetX += columnWidths[index] ?? 0
+    if (localX < offsetX) {
+      column = index
+      break
+    }
+    column = index
+  }
+
+  return { row, column }
+}
+
+const resizeTableTracks = (
+  element: CanvasElement,
+  kind: TableResizeKind,
+  boundaryIndex: number,
+  startSizes: number[],
+  delta: number,
+): CanvasElement => {
+  const nextSizes = [...startSizes]
+  const beforeIndex = boundaryIndex - 1
+  const afterIndex = boundaryIndex
+  const beforeSize = startSizes[beforeIndex] ?? 0
+  const afterSize = startSizes[afterIndex] ?? 0
+  const pairSize = beforeSize + afterSize
+  const minimumSize = Math.min(18, pairSize / 2)
+  const nextBeforeSize = Math.max(minimumSize, Math.min(pairSize - minimumSize, beforeSize + delta))
+  nextSizes[beforeIndex] = nextBeforeSize
+  nextSizes[afterIndex] = pairSize - nextBeforeSize
+
+  const nextTable = normalizeTableConfig(element.table)
+  if (kind === 'column') {
+    nextTable.columnWidths = nextSizes
+  } else {
+    nextTable.rowHeights = nextSizes
+  }
+
+  return {
+    ...element,
+    table: nextTable,
+  }
 }
 
 // 交互状态
 
 // 拖拽状态
-let spaceHeld = false                  // 空格键是否被按住
-let isPanning = false                  // 是否正在平移画布
-let panStart = { x: 0, y: 0 }          // 平移鼠标起始点
-let panStartOffset = { x: 0, y: 0 }    // 平移起始画布的偏移量
+let spaceHeld = false // 空格键是否被按住
+let isPanning = false // 是否正在平移画布
+let panStart = { x: 0, y: 0 } // 平移鼠标起始点
+let panStartOffset = { x: 0, y: 0 } // 平移起始画布的偏移量
 
-interface DragTarget { id: string; startX: number; startY: number }
+interface DragTarget {
+  id: string
+  startX: number
+  startY: number
+}
 
 const dragState = {
-  active: false,                       // 是否正在拖动
-  moved: false,                        // 是否移动过（区分“点击”和“拖拽”）
-  elementId: '',                       // 当前拖拽的元素ID
+  active: false, // 是否正在拖动
+  moved: false, // 是否移动过（区分“点击”和“拖拽”）
+  elementId: '', // 当前拖拽的元素ID
   // 鼠标起始位置（世界坐标）
   startCanvasX: 0,
   startCanvasY: 0,
   // 元素起始位置（世界坐标）
   elementStartX: 0,
   elementStartY: 0,
-  isMulti: false,                      // 是否多选拖拽
-  targets: [] as DragTarget[],         // 多选时所有目标
+  isMulti: false, // 是否多选拖拽
+  targets: [] as DragTarget[], // 多选时所有目标
 }
 
 // 缩放状态
 const resizeState = {
-  active: false,                       // 是否正在缩放
-  elementId: '',                       // 当前缩放的元素ID
-  handle: null as HandleType | null,   // 当前缩放手柄类型
+  active: false, // 是否正在缩放
+  elementId: '', // 当前缩放的元素ID
+  handle: null as HandleType | null, // 当前缩放手柄类型
   // 鼠标起始位置（世界坐标）
   startCanvasX: 0,
   startCanvasY: 0,
@@ -431,25 +716,36 @@ const resizeState = {
 
 // 旋转状态
 const rotateState = {
-  active: false,                        // 是否正在旋转
-  elementId: '',                        // 当前旋转的元素ID
-  startAngle: 0,                        // 鼠标起始角度（弧度）
+  active: false, // 是否正在旋转
+  elementId: '', // 当前旋转的元素ID
+  startAngle: 0, // 鼠标起始角度（弧度）
   // 元素中心（世界坐标）
   centerX: 0,
   centerY: 0,
 }
 
+type TableResizeKind = 'column' | 'row'
+
+const tableResizeState = {
+  active: false,
+  moved: false,
+  elementId: '',
+  kind: 'column' as TableResizeKind,
+  boundaryIndex: 0,
+  startSizes: [] as number[],
+  startCanvasX: 0,
+  startCanvasY: 0,
+}
+let tableResizePreview: CanvasElement | null = null
+
 // 框选状态
 const boxSelectState = {
-  active: false,                          // 是否正在框选
+  active: false, // 是否正在框选
   // 鼠标起始位置（世界坐标）
   startX: 0,
   startY: 0,
   graphics: null as PIXI.Graphics | null, // 框选矩形的图形对象
 }
-
-
-
 
 // 吸附阈值：距离小于5px时吸附
 const ALIGN_THRESHOLD = 5
@@ -466,20 +762,22 @@ const syncDisplayZoom = () => {
 
 const updateStageTransform = () => {
   if (!app) return // 安全检查
-  app.stage.scale.set(zoom, zoom)              // 设置缩放
-  app.stage.position.set(panX, panY)           // 设置平移
+  app.stage.scale.set(zoom, zoom) // 设置缩放
+  app.stage.position.set(panX, panY) // 设置平移
   // 更新点击区域，确保点击事件在缩放和平移后仍然正确
   app.stage.hitArea = new PIXI.Rectangle(
     -panX / zoom,
     -panY / zoom,
     app.screen.width / zoom,
-    app.screen.height / zoom
+    app.screen.height / zoom,
   )
 }
 
 // 重置视口
 const resetView = () => {
-  zoom = 1; panX = 0; panY = 0
+  zoom = 1
+  panX = 0
+  panY = 0
   updateStageTransform()
   syncDisplayZoom()
 }
@@ -488,11 +786,12 @@ const resetView = () => {
 // 画辅助线
 const drawGuides = (guides: { orientation: 'v' | 'h'; position: number }[]) => {
   if (!app) return
-  if (!guideGraphics) { // 首次创建懒加载
-    guideGraphics = new PIXI.Graphics();
-    app.stage.addChild(guideGraphics);
+  if (!guideGraphics) {
+    // 首次创建懒加载
+    guideGraphics = new PIXI.Graphics()
+    app.stage.addChild(guideGraphics)
   }
-  guideGraphics.clear()     // 清空旧线条
+  guideGraphics.clear() // 清空旧线条
   guides.forEach((g) => {
     if (g.orientation === 'v') {
       // 垂直线：从顶部画到底部
@@ -504,7 +803,7 @@ const drawGuides = (guides: { orientation: 'v' | 'h'; position: number }[]) => {
       guideGraphics!.lineTo((-panX + app!.screen.width) / zoom, g.position)
     }
   })
-  guideGraphics.stroke({ width: 1 / zoom, color: 0xe74c3c })  // 红色线条
+  guideGraphics.stroke({ width: 1 / zoom, color: 0xe74c3c }) // 红色线条
 }
 
 // 清除辅助线
@@ -512,8 +811,12 @@ const clearGuides = () => {
   if (guideGraphics) guideGraphics.clear()
 }
 
-const applyAlignSnap = (nx: number, ny: number, dragEl: CanvasElement, draggedIds: Set<string>): { x: number; y: number } => {
-
+const applyAlignSnap = (
+  nx: number,
+  ny: number,
+  dragEl: CanvasElement,
+  draggedIds: Set<string>,
+): { x: number; y: number } => {
   const guides: { orientation: 'v' | 'h'; position: number }[] = []
   let snappedX = nx
   let snappedY = ny
@@ -533,22 +836,22 @@ const applyAlignSnap = (nx: number, ny: number, dragEl: CanvasElement, draggedId
   let bestDY = ALIGN_THRESHOLD + 1
 
   others.forEach((o) => {
-    const oLeft = o.x                       // 左边缘
-    const oRight = o.x + o.width            // 右边缘
-    const oTop = o.y                        // 上边缘
-    const oBottom = o.y + o.height          // 下边缘
-    const oCX = o.x + o.width / 2           // 中心X
-    const oCY = o.y + o.height / 2          // 中心Y
+    const oLeft = o.x // 左边缘
+    const oRight = o.x + o.width // 右边缘
+    const oTop = o.y // 上边缘
+    const oBottom = o.y + o.height // 下边缘
+    const oCX = o.x + o.width / 2 // 中心X
+    const oCY = o.y + o.height / 2 // 中心Y
 
     // dv:drag 元素的value（被拖拽元素的值）
     // ov:other 元素的value（其他元素的值）
     // gp:guide position（辅助线位置）
     const xChecks = [
-      { dv: dLeft, ov: oLeft, gp: oLeft },          // 左↔左
-      { dv: dRight, ov: oRight, gp: oRight },       // 右↔右
-      { dv: dCX, ov: oCX, gp: oCX },                // 中↔中
-      { dv: dLeft, ov: oRight, gp: oRight },        // 左↔右
-      { dv: dRight, ov: oLeft, gp: oLeft },         // 右↔左
+      { dv: dLeft, ov: oLeft, gp: oLeft }, // 左↔左
+      { dv: dRight, ov: oRight, gp: oRight }, // 右↔右
+      { dv: dCX, ov: oCX, gp: oCX }, // 中↔中
+      { dv: dLeft, ov: oRight, gp: oRight }, // 左↔右
+      { dv: dRight, ov: oLeft, gp: oLeft }, // 右↔左
     ]
     xChecks.forEach((c) => {
       const diff = Math.abs(c.dv - c.ov)
@@ -578,7 +881,9 @@ const applyAlignSnap = (nx: number, ny: number, dragEl: CanvasElement, draggedId
 
   if (guides.length > 0) {
     drawGuides(guides)
-  } else { clearGuides() }
+  } else {
+    clearGuides()
+  }
 
   return { x: snappedX, y: snappedY }
 }
@@ -587,6 +892,17 @@ const applyAlignSnap = (nx: number, ny: number, dragEl: CanvasElement, draggedId
 
 const commitInteraction = () => {
   const store = useCanvasStore()
+  // 表格内部行列尺寸提交
+  if (tableResizeState.active) {
+    if (tableResizeState.moved && tableResizePreview) {
+      store.updateElement(tableResizePreview.id, {
+        table: normalizeTableConfig(tableResizePreview.table),
+      })
+    }
+    tableResizeState.active = false
+    tableResizeState.moved = false
+    tableResizePreview = null
+  }
   // 拖拽提交
   if (dragState.active) {
     // 多选拖拽
@@ -595,23 +911,17 @@ const commitInteraction = () => {
         const c = elementContainers.get(t.id) // 获取PIXI容器
         const el = props.elements.find((e) => e.id === t.id) // 获取元素数据
         if (c && el) {
-          store.updateElement(t.id,
-          {
+          store.updateElement(t.id, {
             x: c.x - el.width / 2,
-            y: c.y - el.height / 2
-          }
-        )
+            y: c.y - el.height / 2,
+          })
         }
       })
     } else {
       const c = elementContainers.get(dragState.elementId)
       const el = props.elements.find((e) => e.id === dragState.elementId)
       if (c && el) {
-        store.updateElement(dragState.elementId,
-        { x: c.x - el.width / 2,
-          y: c.y - el.height / 2
-        }
-      )
+        store.updateElement(dragState.elementId, { x: c.x - el.width / 2, y: c.y - el.height / 2 })
       }
     }
     dragState.active = false
@@ -621,8 +931,8 @@ const commitInteraction = () => {
   if (resizeState.active) {
     const c = elementContainers.get(resizeState.elementId)
     if (c) {
-      const newW = resizeState.startW * c.scale.x           // 计算新的宽度
-      const newH = resizeState.startH * c.scale.y           // 计算新的高度
+      const newW = resizeState.startW * c.scale.x // 计算新的宽度
+      const newH = resizeState.startH * c.scale.y // 计算新的高度
       store.updateElement(resizeState.elementId, {
         x: c.x - newW / 2,
         y: c.y - newH / 2,
@@ -636,7 +946,7 @@ const commitInteraction = () => {
   if (rotateState.active) {
     const c = elementContainers.get(rotateState.elementId)
     if (c) {
-      const deg = (c.rotation * 180) / Math.PI       // 弧度 -> 角度
+      const deg = (c.rotation * 180) / Math.PI // 弧度 -> 角度
       store.updateElement(rotateState.elementId, { rotation: deg })
     }
     rotateState.active = false
@@ -651,30 +961,34 @@ const setupCanvasInteraction = () => {
   if (!app) return
 
   // 设置画布事件模式
-  app.stage.eventMode = 'static'                // 响应事件
-  app.stage.hitArea = new PIXI.Rectangle(0, 0, app.screen.width, app.screen.height)   // 点击区域
+  app.stage.eventMode = 'static' // 响应事件
+  app.stage.hitArea = new PIXI.Rectangle(0, 0, app.screen.width, app.screen.height) // 点击区域
 
   const view = app.renderer.canvas
 
   // 滚轮缩放
-  view.addEventListener('wheel', (e: WheelEvent) => {
-    e.preventDefault()                                        // 阻止默认滚动行为
-    const rect = view.getBoundingClientRect()                 // 获取画布在页面中的位置和大小
-    // 计算鼠标在画布上的位置（相对于画布左上角）
-    const mouseX = e.clientX - rect.left
-    const mouseY = e.clientY - rect.top
+  view.addEventListener(
+    'wheel',
+    (e: WheelEvent) => {
+      e.preventDefault() // 阻止默认滚动行为
+      const rect = view.getBoundingClientRect() // 获取画布在页面中的位置和大小
+      // 计算鼠标在画布上的位置（相对于画布左上角）
+      const mouseX = e.clientX - rect.left
+      const mouseY = e.clientY - rect.top
 
-    const worldBefore = screenToCanvas(mouseX, mouseY)        // 缩放前鼠标对应的世界坐标
-    const delta = e.deltaY > 0 ? 0.9 : 1.1                    // 滚轮向下缩小，向上放大，计算缩放倍率
-    zoom = Math.max(0.1, Math.min(10, zoom * delta))          // 限制缩放范围在0.1到10之间
+      const worldBefore = screenToCanvas(mouseX, mouseY) // 缩放前鼠标对应的世界坐标
+      const delta = e.deltaY > 0 ? 0.9 : 1.1 // 滚轮向下缩小，向上放大，计算缩放倍率
+      zoom = Math.max(0.1, Math.min(10, zoom * delta)) // 限制缩放范围在0.1到10之间
 
-    const worldAfter = screenToCanvas(mouseX, mouseY)         // 缩放后鼠标对应的世界坐标
-    // 调整平移量，保持鼠标位置不变
-    panX += (worldAfter.x - worldBefore.x) * zoom
-    panY += (worldAfter.y - worldBefore.y) * zoom
-    updateStageTransform()
-    syncDisplayZoom()
-  }, { passive: false })
+      const worldAfter = screenToCanvas(mouseX, mouseY) // 缩放后鼠标对应的世界坐标
+      // 调整平移量，保持鼠标位置不变
+      panX += (worldAfter.x - worldBefore.x) * zoom
+      panY += (worldAfter.y - worldBefore.y) * zoom
+      updateStageTransform()
+      syncDisplayZoom()
+    },
+    { passive: false },
+  )
 
   // 空格键控制平移
   // 按下
@@ -707,8 +1021,8 @@ const setupCanvasInteraction = () => {
     // 如果是中键按下或空格键被按住，则进入平移模式
     if (isMiddleButton || spaceHeld) {
       isPanning = true
-      panStart = { x: event.globalX, y: event.globalY }                  // 鼠标按下的位置
-      panStartOffset = { x: panX, y: panY }                              // 当前平移偏移量
+      panStart = { x: event.globalX, y: event.globalY } // 鼠标按下的位置
+      panStartOffset = { x: panX, y: panY } // 当前平移偏移量
       if (app) app.renderer.canvas.style.cursor = 'grabbing'
       event.stopPropagation()
       return
@@ -740,6 +1054,29 @@ const setupCanvasInteraction = () => {
     // 记录鼠标在画布上的位置（世界坐标）
     const current = screenToCanvas(event.globalX, event.globalY)
 
+    // 表格内部分隔线拖动：只替换 Pixi 预览，松开后再写入 Store
+    if (tableResizeState.active) {
+      const element = props.elements.find((item) => item.id === tableResizeState.elementId)
+      if (element) {
+        const angle = ((element.rotation || 0) * Math.PI) / 180
+        const deltaX = current.x - tableResizeState.startCanvasX
+        const deltaY = current.y - tableResizeState.startCanvasY
+        const localDeltaX = deltaX * Math.cos(angle) + deltaY * Math.sin(angle)
+        const localDeltaY = -deltaX * Math.sin(angle) + deltaY * Math.cos(angle)
+        const delta = tableResizeState.kind === 'column' ? localDeltaX : localDeltaY
+        tableResizePreview = resizeTableTracks(
+          element,
+          tableResizeState.kind,
+          tableResizeState.boundaryIndex,
+          tableResizeState.startSizes,
+          delta,
+        )
+        tableResizeState.moved = true
+        replaceElementContainer(tableResizePreview)
+      }
+      return
+    }
+
     // 拖拽模式
     if (dragState.active) {
       dragState.moved = true
@@ -752,7 +1089,7 @@ const setupCanvasInteraction = () => {
           const c = elementContainers.get(t.id)
           const el = props.elements.find((e) => e.id === t.id)
           if (c && el) {
-            c.x = t.startX + deltaX + el.width / 2;
+            c.x = t.startX + deltaX + el.width / 2
             c.y = t.startY + deltaY + el.height / 2
           }
         })
@@ -786,13 +1123,28 @@ const setupCanvasInteraction = () => {
       const dx = current.x - resizeState.startCanvasX
       const dy = current.y - resizeState.startCanvasY
       // 计算新的位置和大小
-      let { x, y, w, h } = { x: resizeState.startX, y: resizeState.startY, w: resizeState.startW, h: resizeState.startH }
+      let { x, y, w, h } = {
+        x: resizeState.startX,
+        y: resizeState.startY,
+        w: resizeState.startW,
+        h: resizeState.startH,
+      }
       const hType = resizeState.handle
 
-      if (hType === 'nw' || hType === 'w' || hType === 'sw') { x += dx; w -= dx }
-      if (hType === 'ne' || hType === 'e' || hType === 'se') { w += dx }
-      if (hType === 'nw' || hType === 'n' || hType === 'ne') { y += dy; h -= dy }
-      if (hType === 'sw' || hType === 's' || hType === 'se') { h += dy }
+      if (hType === 'nw' || hType === 'w' || hType === 'sw') {
+        x += dx
+        w -= dx
+      }
+      if (hType === 'ne' || hType === 'e' || hType === 'se') {
+        w += dx
+      }
+      if (hType === 'nw' || hType === 'n' || hType === 'ne') {
+        y += dy
+        h -= dy
+      }
+      if (hType === 'sw' || hType === 's' || hType === 'se') {
+        h += dy
+      }
 
       // 如果按住 Shift 键，则保持宽高比
       if (event.shiftKey && resizeState.startW > 0 && resizeState.startH > 0) {
@@ -801,11 +1153,13 @@ const setupCanvasInteraction = () => {
       }
 
       // 限制最小宽高为 20px
-      w = Math.max(20, w); h = Math.max(20, h)
+      w = Math.max(20, w)
+      h = Math.max(20, h)
       // 更新容器位置和缩放
       const c = elementContainers.get(resizeState.elementId)
       if (c) {
-        c.x = x + w / 2; c.y = y + h / 2
+        c.x = x + w / 2
+        c.y = y + h / 2
         c.scale.x = w / resizeState.startW
         c.scale.y = h / resizeState.startH
       }
@@ -814,10 +1168,7 @@ const setupCanvasInteraction = () => {
     // 旋转模式
     if (rotateState.active) {
       // 计算当前鼠标相对于旋转中心的角度
-      const angle = Math.atan2(
-        current.y - rotateState.centerY,
-        current.x - rotateState.centerX
-      )
+      const angle = Math.atan2(current.y - rotateState.centerY, current.x - rotateState.centerX)
       // 计算旋转角度（弧度 -> 角度）
       let deg = ((angle - rotateState.startAngle) * 180) / Math.PI
       // 如果按住 Shift 键，则角度吸附到 15 度的倍数
@@ -833,7 +1184,7 @@ const setupCanvasInteraction = () => {
       const w = Math.abs(current.x - boxSelectState.startX)
       const h = Math.abs(current.y - boxSelectState.startY)
       if (boxSelectState.graphics) {
-        boxSelectState.graphics.clear()                                // 清空旧的矩形
+        boxSelectState.graphics.clear() // 清空旧的矩形
         boxSelectState.graphics.rect(x, y, w, h)
         boxSelectState.graphics.stroke({ width: 1 / zoom, color: 0x3498db })
         boxSelectState.graphics.fill({ color: 0x3498db, alpha: 0.1 })
@@ -867,22 +1218,24 @@ const setupCanvasInteraction = () => {
       const sw = Math.abs(current.x - boxSelectState.startX)
       const sh = Math.abs(current.y - boxSelectState.startY)
       if (sw > 3 || sh > 3) {
-        let selected: CanvasElement[] = []  // 提前声明
+        let selected: CanvasElement[] = [] // 提前声明
         if (!event.shiftKey) {
           // 部分重叠模式（默认）
-          selected = props.elements.filter(el =>
-            el.x < sx + sw && el.x + el.width > sx &&
-            el.y < sy + sh && el.y + el.height > sy
+          selected = props.elements.filter(
+            (el) =>
+              el.x < sx + sw && el.x + el.width > sx && el.y < sy + sh && el.y + el.height > sy,
           )
         } else {
           // 完全包含模式（按住 Shift）
-          selected = props.elements.filter(el =>
-            el.x >= sx && el.x + el.width <= sx + sw &&
-            el.y >= sy && el.y + el.height <= sy + sh
+          selected = props.elements.filter(
+            (el) =>
+              el.x >= sx && el.x + el.width <= sx + sw && el.y >= sy && el.y + el.height <= sy + sh,
           )
         }
-        emit('selection-change', selected)  // 统一发送
-      } else { emit('selection-change', []) }
+        emit('selection-change', selected) // 统一发送
+      } else {
+        emit('selection-change', [])
+      }
       // 清除框选状态
       boxSelectState.active = false
     }
@@ -894,7 +1247,8 @@ const setupCanvasInteraction = () => {
       isPanning = false
       if (app) app.renderer.canvas.style.cursor = spaceHeld ? 'grab' : ''
     }
-    if (dragState.active || resizeState.active || rotateState.active) commitInteraction()
+    if (dragState.active || resizeState.active || rotateState.active || tableResizeState.active)
+      commitInteraction()
     if (boxSelectState.active) {
       const rubber = boxSelectState.graphics
       if (rubber) {
@@ -939,6 +1293,14 @@ const setupElementInteraction = () => {
           }, 0)
           return
         }
+        if (el.type === 'table') {
+          const localPosition = container.toLocal(event.global)
+          editingTableCell.value = getTableCellAt(el, localPosition.x, localPosition.y)
+          setTimeout(() => {
+            editingTableElement.value = el
+          }, 0)
+          return
+        }
         return
       }
       lastDblClickTime = now
@@ -949,19 +1311,40 @@ const setupElementInteraction = () => {
       const isSelected = props.selectedIds.includes(id)
       const localPos = container.toLocal(event.global)
 
+      // 选中表格时，优先命中内部行列分隔线，拖动只改变对应行列尺寸。
+      if (el.type === 'table' && isSelected) {
+        const tableHandle = getTableResizeHandleAt(el, localPos.x, localPos.y, 6 / zoom)
+        if (tableHandle) {
+          const trackSizes = getTableTrackSizes(el)
+          const canvasPos = screenToCanvas(event.globalX, event.globalY)
+          tableResizeState.active = true
+          tableResizeState.moved = false
+          tableResizeState.elementId = id
+          tableResizeState.kind = tableHandle.kind
+          tableResizeState.boundaryIndex = tableHandle.boundaryIndex
+          tableResizeState.startSizes =
+            tableHandle.kind === 'column' ? trackSizes.columnWidths : trackSizes.rowHeights
+          tableResizeState.startCanvasX = canvasPos.x
+          tableResizeState.startCanvasY = canvasPos.y
+          tableResizePreview = el
+          return
+        }
+      }
+
       // 检测是否点击了手柄
       if (isSelected) {
         const handle = getHandleAt(el, localPos.x, localPos.y)
         if (handle === 'rotate') {
           const canvasPos = screenToCanvas(event.globalX, event.globalY)
-          const cx = el.x + el.width / 2            // 元素中心X
-          const cy = el.y + el.height / 2           // 元素中心Y
+          const cx = el.x + el.width / 2 // 元素中心X
+          const cy = el.y + el.height / 2 // 元素中心Y
           // 记录旋转状态
           rotateState.active = true
           rotateState.elementId = id
           rotateState.centerX = cx
           rotateState.centerY = cy
-          rotateState.startAngle = Math.atan2(canvasPos.y - cy, canvasPos.x - cx) - (el.rotation || 0) * Math.PI / 180
+          rotateState.startAngle =
+            Math.atan2(canvasPos.y - cy, canvasPos.x - cx) - ((el.rotation || 0) * Math.PI) / 180
           return
         }
         // 检测是否点击了调整大小手柄
@@ -1018,15 +1401,29 @@ const setupElementInteraction = () => {
       }
     })
 
-
     container.on('pointermove', (event: PIXI.FederatedPointerEvent) => {
       if (!props.selectedIds.includes(id)) return
       const localPos = container.toLocal(event.global)
+      if (el.type === 'table') {
+        const tableHandle = getTableResizeHandleAt(el, localPos.x, localPos.y, 6 / zoom)
+        if (tableHandle) {
+          container.cursor =
+            tableHandle.kind === 'column' ? COLUMN_RESIZE_CURSOR : ROW_RESIZE_CURSOR
+          return
+        }
+      }
       const h = getHandleAt(el, localPos.x, localPos.y)
       // 定义鼠标样式映射
       const cursors: Record<string, string> = {
-        nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize',
-        n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', rotate: 'grab',
+        nw: 'nwse-resize',
+        se: 'nwse-resize',
+        ne: 'nesw-resize',
+        sw: 'nesw-resize',
+        n: 'ns-resize',
+        s: 'ns-resize',
+        e: 'ew-resize',
+        w: 'ew-resize',
+        rotate: 'grab',
       }
       container.cursor = h ? cursors[h] : 'pointer'
     })
@@ -1046,10 +1443,14 @@ const handleChartPreview = (data: ChartData) => {
   const element = editingChartElement.value
   if (!element?.chart) return
   const runtime = chartRuntimes.get(element.id)
-  runtime?.update({
-    ...element,
-    chart: { ...element.chart, data },
-  }, element.width, element.height)
+  runtime?.update(
+    {
+      ...element,
+      chart: { ...element.chart, data },
+    },
+    element.width,
+    element.height,
+  )
 }
 
 const handleChartCommit = (data: ChartData) => {
@@ -1069,20 +1470,111 @@ const handleChartCancel = () => {
   editingChartElement.value = null
 }
 
+const resizeElementForTable = (element: CanvasElement, table: TableConfig): CanvasElement => {
+  const currentTable = normalizeTableConfig(element.table)
+  const width = Math.max(20, (element.width * table.columns) / currentTable.columns)
+  const height = Math.max(20, (element.height * table.rows) / currentTable.rows)
+
+  return {
+    ...element,
+    width,
+    height,
+    table: cloneTableConfig(table),
+  }
+}
+
+const replaceElementContainer = (element: CanvasElement) => {
+  const pixiApp = app
+  const existing = elementContainers.get(element.id)
+  if (!pixiApp || !existing) return
+
+  const index = pixiApp.stage.getChildIndex(existing)
+  pixiApp.stage.removeChild(existing)
+  existing.destroy({ children: true })
+
+  const container = renderElement(element, props.selectedIds.includes(element.id))
+  elementContainers.set(element.id, container)
+  pixiApp.stage.addChildAt(container, Math.min(index, pixiApp.stage.children.length))
+  setupElementInteraction()
+}
+
+const handleTablePreview = (table: TableConfig) => {
+  const previewElement = editingTableElement.value
+  if (!previewElement) return
+  const originalElement = props.elements.find((element) => element.id === previewElement.id)
+  if (!originalElement) return
+
+  const nextElement = resizeElementForTable(originalElement, table)
+  editingTableElement.value = nextElement
+  replaceElementContainer(nextElement)
+}
+
+const handleTableCommit = (table: TableConfig) => {
+  const previewElement = editingTableElement.value
+  if (!previewElement) return
+  const originalElement = props.elements.find((element) => element.id === previewElement.id)
+  if (!originalElement) return
+
+  useCanvasStore().updateElement(originalElement.id, {
+    table: normalizeTableConfig(table),
+    width: previewElement.width,
+    height: previewElement.height,
+  })
+  editingTableElement.value = null
+  editingTableCell.value = null
+}
+
+const handleTableCancel = () => {
+  editingTableElement.value = null
+  editingTableCell.value = null
+  renderAllElements()
+}
+
+const updateSelectedTable = (nextTable: TableConfig) => {
+  const element = selectedTableElement.value
+  if (!element) return
+
+  const nextElement = resizeElementForTable(element, nextTable)
+  useCanvasStore().updateElement(element.id, {
+    table: nextElement.table,
+    width: nextElement.width,
+    height: nextElement.height,
+  })
+}
+
+const handleTableAddRow = () => {
+  const element = selectedTableElement.value
+  if (!element) return
+  updateSelectedTable(appendTableRow(normalizeTableConfig(element.table)))
+}
+
+const handleTableAddColumn = () => {
+  const element = selectedTableElement.value
+  if (!element) return
+  updateSelectedTable(appendTableColumn(normalizeTableConfig(element.table)))
+}
+
 // 监听器
 watch(
   () => [props.elements, props.selectedIds] as const,
-  () => { renderAllElements() },
+  () => {
+    renderAllElements()
+  },
   { deep: true },
 )
 
 // 生命周期
-onMounted(() => { initPixi() })
+onMounted(() => {
+  initPixi()
+})
 
 onUnmounted(() => {
   chartRuntimes.forEach((runtime) => runtime.destroy())
   chartRuntimes.clear()
-  if (app) { app.destroy(true, { children: true, texture: true }); app = null }
+  if (app) {
+    app.destroy(true, { children: true, texture: true })
+    app = null
+  }
   elementContainers.clear()
 })
 </script>
@@ -1102,23 +1594,24 @@ onUnmounted(() => {
 
 .viewport-indicator {
   position: absolute;
-  bottom: 12px;
-  right: 12px;
+  right: 14px;
+  bottom: 14px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid #dee2e6;
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-size: 12px;
+  gap: 5px;
+  padding: 5px 7px;
+  border: 1px solid #e4e9f0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 5px 14px rgba(31, 49, 78, 0.07);
+  font-size: 11px;
   z-index: 50;
 }
 
 .zoom-label {
-  color: #495057;
-  font-weight: 500;
-  min-width: 40px;
+  min-width: 42px;
+  color: #5c6a7f;
+  font-weight: 600;
   text-align: center;
 }
 
@@ -1128,12 +1621,16 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
-  border: 1px solid #dee2e6;
-  border-radius: 3px;
-  cursor: pointer;
+  border: 0;
+  border-radius: 6px;
+  color: #68758a;
+  background: #f6f8fb;
   font-size: 14px;
-  color: #495057;
+  cursor: pointer;
 }
-.reset-btn:hover { background: #f8f9fa; }
+
+.reset-btn:hover {
+  color: #2f6fed;
+  background: #edf3ff;
+}
 </style>
