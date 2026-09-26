@@ -111,14 +111,17 @@ const updateStroke = (e: Event) => {
 <style scoped>
 .floating-toolbar {
   position: absolute;
-  top: 20px;
+  top: 16px;
   left: 50%;
   transform: translateX(-50%);
-  background: white;
-  border: 1px solid #e9ecef;
-  border-radius: 8px;
-  padding: 8px 16px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 6px 8px;
+  border: 1px solid #e4e9f0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 10px 24px rgba(31, 49, 78, 0.09),
+    0 2px 6px rgba(31, 49, 78, 0.05);
+  backdrop-filter: blur(10px);
   font-size: 12px;
   z-index: 1000;
 }
@@ -126,57 +129,85 @@ const updateStroke = (e: Event) => {
 .toolbar-content {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .selection-info {
-  color: #495057;
-  font-weight: 500;
+  padding: 0 4px;
+  color: #5c6a7f;
+  font-weight: 600;
   white-space: nowrap;
 }
 
 .toolbar-actions {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   align-items: center;
 }
 
 .separator {
   width: 1px;
-  height: 20px;
-  background: #dee2e6;
+  height: 18px;
   margin: 0 4px;
+  background: #e7ebf1;
 }
 
 .action-btn {
-  width: 28px;
-  height: 28px;
+  position: relative;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #667389;
   background: transparent;
-  border: 1px solid #dee2e6;
-  border-radius: 4px;
-  cursor: pointer;
-  color: #495057;
   font-size: 12px;
-  position: relative;
+  cursor: pointer;
 }
 
-.action-btn:hover { background: #f8f9fa; border-color: #adb5bd; }
-.action-btn.active { background: #3498db; color: #fff; border-color: #3498db; }
+.action-btn:hover {
+  color: #2f6fed;
+  border-color: #d9e4fb;
+  background: #edf3ff;
+}
 
-.action-btn .icon { width: 14px; height: 14px; }
-.flip { transform: rotate(180deg); }
+.action-btn.active {
+  color: #ffffff;
+  border-color: #2f6fed;
+  background: #2f6fed;
+}
 
-.color-btn { padding: 2px; overflow: hidden; }
-.color-swatch { display: block; width: 18px; height: 18px; border-radius: 2px; border: 1px solid #ccc; }
+.action-btn .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.flip {
+  transform: rotate(180deg);
+}
+
+.color-btn {
+  overflow: hidden;
+}
+
+.color-swatch {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(30, 42, 60, 0.14);
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.72);
+}
+
 .color-input {
   position: absolute;
   inset: 0;
-  opacity: 0;
-  cursor: pointer;
   width: 100%;
   height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 </style>
