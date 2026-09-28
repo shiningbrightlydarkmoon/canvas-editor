@@ -131,6 +131,53 @@ export const useCanvasStore = defineStore('canvas', () => {
     return true
   }
 
+  // 批量应用一组变更，供 Agent 等自动化流程使用。
+  // 整个批次只写入一条历史记录，因此用户可以一次性撤销。
+  const applyElementBatch = (
+    description: string,
+    changes: {
+      additions?: CreateElementInput[]
+      updates?: Array<{ id: string; updates: Partial<CanvasElement> }>
+      deletions?: string[]
+    },
+  ): string[] => {
+    const additions = changes.additions ?? []
+    const updates = changes.updates ?? []
+    const deletions = changes.deletions ?? []
+    if (additions.length === 0 && updates.length === 0 && deletions.length === 0) return []
+
+    const prevState = deepClone(elements.value)
+    const addedIds: string[] = []
+    let nextZIndex = getMaxZIndex()
+
+    additions.forEach((input) => {
+      nextZIndex += 1
+      const element = createNewElement({ ...input, zIndex: input.zIndex ?? nextZIndex })
+      elements.value[element.id] = element
+      addedIds.push(element.id)
+    })
+
+    updates.forEach(({ id, updates: elementUpdates }) => {
+      const existing = elements.value[id]
+      if (!existing || existing.isLocked) return
+      elements.value[id] = {
+        ...existing,
+        ...elementUpdates,
+        updatedAt: Date.now(),
+      }
+    })
+
+    deletions.forEach((id) => {
+      const existing = elements.value[id]
+      if (!existing || existing.isLocked) return
+      delete elements.value[id]
+      selectedIds.value = selectedIds.value.filter((selectedId) => selectedId !== id)
+    })
+
+    historyStore.pushHistory(description, prevState, elements.value, 'update')
+    return addedIds
+  }
+
   // 删除元素
   const deleteElement = (id: string): boolean => {
     const element = elements.value[id]
@@ -494,6 +541,7 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     addElement,
     updateElement,
+    applyElementBatch,
     deleteElement,
     deleteSelectedElements,
     getElement,
