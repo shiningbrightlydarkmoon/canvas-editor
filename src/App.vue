@@ -95,32 +95,50 @@
       <aside class="right-sidebar">
         <div class="inspector-shell">
           <div class="inspector-tabs">
-            <button class="inspector-tab active">
+            <button
+              class="inspector-tab"
+              :class="{ active: inspectorTab === 'properties' }"
+              type="button"
+              @click="inspectorTab = 'properties'"
+            >
               <SlidersHorizontal :size="15" />
               <span>属性</span>
             </button>
+            <button
+              class="inspector-tab"
+              :class="{ active: inspectorTab === 'agent' }"
+              type="button"
+              @click="inspectorTab = 'agent'"
+            >
+              <Bot :size="15" />
+              <span>Agent</span>
+            </button>
           </div>
 
-          <div v-if="selectedElements.length === 1 && selectedElements[0]" class="inspector-scroll">
-            <ElementProperties
-              :element="selectedElements[0]"
-              @change="handleElementPropertyChange"
-            />
-          </div>
-
-          <div v-else class="inspector-empty">
-            <div class="empty-icon">
-              <MousePointer2 v-if="selectedElements.length === 0" :size="22" />
-              <Layers3 v-else :size="22" />
+          <template v-if="inspectorTab === 'properties'">
+            <div v-if="selectedElements.length === 1 && selectedElements[0]" class="inspector-scroll">
+              <ElementProperties
+                :element="selectedElements[0]"
+                @change="handleElementPropertyChange"
+              />
             </div>
-            <strong>
-              {{
-                selectedElements.length === 0
-                  ? '未选择元素'
-                  : `已选择 ${selectedElements.length} 个元素`
-              }}
-            </strong>
-          </div>
+
+            <div v-else class="inspector-empty">
+              <div class="empty-icon">
+                <MousePointer2 v-if="selectedElements.length === 0" :size="22" />
+                <Layers3 v-else :size="22" />
+              </div>
+              <strong>
+                {{
+                  selectedElements.length === 0
+                    ? '未选择元素'
+                    : `已选择 ${selectedElements.length} 个元素`
+                }}
+              </strong>
+            </div>
+          </template>
+
+          <AgentPanel v-else />
         </div>
       </aside>
     </div>
@@ -143,6 +161,7 @@ import { useShortcuts } from '@/core/composables/useShortcuts'
 import { fileToBase64 } from '@/lib/utils/file'
 import {
   ChartColumn,
+  Bot,
   Circle,
   Image as ImageIcon,
   Layers3,
@@ -161,6 +180,7 @@ import {
 import CanvasArea from '@/modules/rendering/CanvasArea.vue'
 import FloatingToolbar from '@/modules/ui/components/FloatingToolbar.vue'
 import ElementProperties from '@/modules/ui/components/ElementProperties.vue'
+import AgentPanel from '@/modules/ui/components/AgentPanel.vue'
 import TableSizePicker from '@/modules/ui/components/TableSizePicker.vue'
 import ChartTypePicker from '@/modules/ui/components/ChartTypePicker.vue'
 import type { CanvasElement, ChartType } from '@/core/types'
@@ -214,6 +234,7 @@ const triggerImageUpload = () => {
 
 const isTablePickerOpen = ref(false)
 const isChartPickerOpen = ref(false)
+const inspectorTab = ref<'properties' | 'agent'>('properties')
 
 const handleTableInsert = (rows: number, columns: number) => {
   const dimensions = getTableDimensions(rows, columns)
@@ -731,6 +752,7 @@ const handleImageUpload = async (e: Event) => {
   height: 54px;
   display: flex;
   align-items: center;
+  gap: 4px;
   padding: 0 16px;
   border-bottom: 1px solid var(--panel-border);
   flex-shrink: 0;

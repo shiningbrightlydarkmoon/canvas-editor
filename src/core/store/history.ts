@@ -8,7 +8,7 @@ export const useHistoryStore = defineStore('history', () => {
   const currentIndex = ref(-1)                        // 当前历史记录索引，指向 historyStack 中的当前记录
   const maxHistorySize = 50                           // 最大历史记录数量，超过该数量时会删除最早的记录
 
-  const canUndo = computed(() => currentIndex.value > 0)
+  const canUndo = computed(() => currentIndex.value >= 0 && historyStack.value.length > 0)
   const canRedo = computed(() => currentIndex.value < historyStack.value.length - 1)
   const historyCount = computed(() => historyStack.value.length)
 
@@ -37,9 +37,8 @@ export const useHistoryStore = defineStore('history', () => {
 
     if (historyStack.value.length > maxHistorySize) {
       historyStack.value.shift()
-    } else {
-      currentIndex.value = historyStack.value.length - 1
     }
+    currentIndex.value = historyStack.value.length - 1
   }
 
   // 撤销操作，返回上一个状态，如果无法撤销则返回 null
