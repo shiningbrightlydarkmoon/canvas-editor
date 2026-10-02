@@ -30,27 +30,18 @@ const ALLOWED_OPERATION_TYPES = [
 ]
 
 const CHART_TYPES = [
-  'bar',
-  'horizontal-bar',
-  'stacked-bar',
   'line',
   'area',
   'stacked-area',
+  'bar',
+  'horizontal-bar',
+  'stacked-bar',
   'pie',
   'doughnut',
   'rose',
   'scatter',
   'bubble',
-  'radar',
-  'gauge',
   'funnel',
-  'candlestick',
-  'boxplot',
-  'heatmap',
-  'treemap',
-  'sunburst',
-  'sankey',
-  'graph',
 ]
 
 const SYSTEM_PROMPT = `你是 Canvas Editor 的画布编辑 Agent。

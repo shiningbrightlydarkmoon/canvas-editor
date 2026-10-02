@@ -7,30 +7,26 @@ export type ElementType = 'rect' | 'circle' | 'triangle' | 'text' | 'image' | 'c
 
 /**
  * 图表类型
- * 这里保留 20+ 种常见类型，具体渲染能力由 chartRegistry 提供。
+ * 按折线 / 柱状 / 饼 / 散点 / 漏斗 五类收敛，具体渲染能力由 chartRegistry 提供。
  */
 export type ChartType =
-  | 'bar'
-  | 'horizontal-bar'
-  | 'stacked-bar'
+  // 折线图类
   | 'line'
   | 'area'
   | 'stacked-area'
+  // 柱状图类
+  | 'bar'
+  | 'horizontal-bar'
+  | 'stacked-bar'
+  // 饼图类
   | 'pie'
   | 'doughnut'
   | 'rose'
+  // 散点图类
   | 'scatter'
   | 'bubble'
-  | 'radar'
-  | 'gauge'
+  // 漏斗图类
   | 'funnel'
-  | 'candlestick'
-  | 'boxplot'
-  | 'heatmap'
-  | 'treemap'
-  | 'sunburst'
-  | 'sankey'
-  | 'graph'
 
 /**
  * 数据列类型

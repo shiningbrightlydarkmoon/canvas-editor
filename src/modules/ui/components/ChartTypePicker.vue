@@ -1,7 +1,7 @@
 <template>
   <div ref="rootRef" class="chart-type-picker" @mousedown.stop>
     <aside class="chart-categories">
-      <div class="picker-title">图表类型</div>
+      <div class="picker-title">图表分类</div>
       <button
         v-for="category in chartCategories"
         :key="category.id"
@@ -27,7 +27,7 @@
       <div class="chart-grid">
         <button
           v-for="option in activeOptions"
-          :key="`${activeCategoryId}-${option.value}`"
+          :key="option.value"
           type="button"
           class="chart-option"
           :title="`${option.label}：${option.description}`"
@@ -51,17 +51,12 @@ import { computed, onMounted, onUnmounted, ref, type Component } from 'vue'
 import {
   ChartArea,
   ChartBar,
-  ChartCandlestick,
   ChartColumn,
   ChartLine,
-  ChartNetwork,
-  ChartNoAxesCombined,
   ChartPie,
   ChartScatter,
-  Gauge,
-  Grid3X3,
+  Funnel,
   Layers3,
-  Radar,
 } from 'lucide-vue-next'
 import type { ChartType } from '@/core/types'
 import { chartTypeOptions } from '@/core/charts'
@@ -80,75 +75,61 @@ const emit = defineEmits<{
 }>()
 
 const rootRef = ref<HTMLElement>()
-const activeCategoryId = ref('common')
+const activeCategoryId = ref('trend')
 
+// 五个分类与「折线 / 柱状 / 饼 / 散点 / 漏斗」一一对应，
+// 每个分类下只保留最常用的图表类型。
 const chartCategories: ChartCategory[] = [
   {
-    id: 'common',
-    label: '常用',
-    description: '最常用的数据分析图表',
-    icon: ChartColumn,
-    types: ['bar', 'line', 'pie', 'area', 'horizontal-bar', 'scatter'],
+    id: 'trend',
+    label: '折线图',
+    description: '观察数值随时间或顺序的变化趋势',
+    icon: ChartLine,
+    types: ['line', 'area', 'stacked-area'],
   },
   {
     id: 'comparison',
-    label: '对比',
-    description: '比较不同分类和系列的大小',
-    icon: ChartBar,
-    types: ['bar', 'horizontal-bar', 'stacked-bar', 'radar'],
-  },
-  {
-    id: 'trend',
-    label: '趋势',
-    description: '观察数据随时间与顺序的变化',
-    icon: ChartLine,
-    types: ['line', 'area', 'stacked-area', 'candlestick'],
+    label: '柱状图',
+    description: '比较不同类目的数值大小',
+    icon: ChartColumn,
+    types: ['bar', 'horizontal-bar', 'stacked-bar'],
   },
   {
     id: 'proportion',
-    label: '占比',
-    description: '展示构成比例和层级关系',
+    label: '饼图',
+    description: '展示组成部分占整体的比例',
     icon: ChartPie,
-    types: ['pie', 'doughnut', 'rose', 'funnel', 'treemap', 'sunburst'],
+    types: ['pie', 'doughnut', 'rose'],
   },
   {
     id: 'distribution',
-    label: '分布',
-    description: '观察相关关系和数据分布',
+    label: '散点图',
+    description: '观察两个数值字段之间的关系',
     icon: ChartScatter,
-    types: ['scatter', 'bubble', 'heatmap', 'boxplot'],
+    types: ['scatter', 'bubble'],
   },
   {
-    id: 'relation',
-    label: '关系',
-    description: '表达流向、网络和单指标状态',
-    icon: ChartNetwork,
-    types: ['sankey', 'graph', 'gauge'],
+    id: 'funnel',
+    label: '漏斗图',
+    description: '展示流程各阶段的转化情况',
+    icon: Funnel,
+    types: ['funnel'],
   },
 ]
 
 const chartIcons: Record<ChartType, Component> = {
-  bar: ChartColumn,
-  'horizontal-bar': ChartBar,
-  'stacked-bar': ChartColumn,
   line: ChartLine,
   area: ChartArea,
   'stacked-area': Layers3,
+  bar: ChartColumn,
+  'horizontal-bar': ChartBar,
+  'stacked-bar': ChartColumn,
   pie: ChartPie,
   doughnut: ChartPie,
   rose: ChartPie,
   scatter: ChartScatter,
   bubble: ChartScatter,
-  radar: Radar,
-  gauge: Gauge,
-  funnel: ChartNoAxesCombined,
-  candlestick: ChartCandlestick,
-  boxplot: ChartBar,
-  heatmap: Grid3X3,
-  treemap: Layers3,
-  sunburst: Layers3,
-  sankey: ChartNetwork,
-  graph: ChartNetwork,
+  funnel: Funnel,
 }
 
 const activeCategory = computed(
@@ -195,10 +176,10 @@ onUnmounted(() => {
   top: 60px;
   left: 72px;
   z-index: 1200;
-  width: min(560px, calc(100vw - 96px));
-  height: min(430px, calc(100vh - 76px));
+  width: min(520px, calc(100vw - 96px));
+  height: min(360px, calc(100vh - 76px));
   display: grid;
-  grid-template-columns: 136px minmax(0, 1fr);
+  grid-template-columns: 132px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid #dfe5ed;
   border-radius: 8px;
