@@ -6,6 +6,7 @@ import { useClipboardStore } from './clipboard'
 import { useHistoryStore } from './history'
 import { saveToDB, loadFromDB } from '@/lib/utils/storage'
 import { createDefaultChartData } from '@/core/charts/normalizeData'
+import { normalizeChartType } from '@/core/charts/registry'
 import { normalizeTableConfig } from '@/core/tables'
 
 // 辅助函数，把用户输入的元素数据 CreateElementInput 转换为完整的 CanvasElement 对象
@@ -421,15 +422,16 @@ export const useCanvasStore = defineStore('canvas', () => {
       elements.value = Object.fromEntries(
         Object.entries(saved).map(([id, element]) => [
           id,
-          element.type === 'chart' && !element.chart
+          element.type === 'chart'
             ? {
                 ...element,
                 chart: {
-                  chartType: 'bar' as const,
-                  data: createDefaultChartData(),
-                  xField: 'month',
-                  yFields: ['sales', 'profit'],
-                  title: element.name || '图表',
+                  chartType: normalizeChartType(element.chart?.chartType),
+                  data: element.chart?.data ?? createDefaultChartData(),
+                  xField: element.chart?.xField ?? 'month',
+                  yFields: element.chart?.yFields ?? ['sales', 'profit'],
+                  title: element.chart?.title ?? element.name ?? '图表',
+                  showLegend: element.chart?.showLegend,
                 },
               }
             : element.type === 'table' && !element.table
