@@ -42,13 +42,15 @@ export const useHistoryStore = defineStore('history', () => {
   }
 
   // 撤销操作，返回上一个状态，如果无法撤销则返回 null
+  // 注意顺序：必须先取当前索引对应的记录，再自减索引。
+  // 若先自减，只有一条记录时会取到 undefined 导致撤销无效，多条记录时会一次回退两步。
   const undo = () => {
     if (!canUndo.value) return null
 
-    currentIndex.value--
     const record = historyStack.value[currentIndex.value]
-
     if (!record) return null
+
+    currentIndex.value--
 
     return record.prevState
   }
