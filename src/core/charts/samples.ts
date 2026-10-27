@@ -1,6 +1,7 @@
 import type { ChartConfig, ChartData, ChartType } from '@/core/types'
 import { getChartDefinition } from './registry'
 
+// 创建图表示例数据
 const createComparisonData = (): ChartData => ({
   columns: [
     { key: 'category', label: '分类', type: 'string' },
@@ -46,6 +47,7 @@ const createScatterData = (): ChartData => ({
   ],
 })
 
+// 创建图表配置对象
 const createConfig = (
   chartType: ChartType,
   data: ChartData,
@@ -60,6 +62,7 @@ const createConfig = (
   showLegend: true,
 })
 
+// 总入口，根据图表类型创建对应的图表配置对象
 export const createChartSampleConfig = (chartType: ChartType): ChartConfig => {
   switch (chartType) {
     // 散点 / 气泡：两个数值轴，气泡额外用第三个字段编码大小

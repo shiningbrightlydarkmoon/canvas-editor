@@ -1,24 +1,33 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
+// 定义 Agent 操作接口
 interface AgentOperation {
-  id: string
-  type: string
-  payload: Record<string, unknown>
-  reason?: string
+  id: string                                        // 操作标识
+  type: string                                      // 操作类型
+  payload: Record<string, unknown>                  // 各操作自己的参数，未校验前是未知结构
+  reason?: string                                   // 模型自述操作原因
 }
 
+// 前端 POST 的请求体
 interface AgentRunBody {
-  message?: string
-  context?: unknown
-  history?: Array<{ role: 'user' | 'assistant'; content: string }>
+  message?: string                                                          // 用户自然语言
+  context?: unknown                                                         // 当前画布上下文
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>          // 历史对话
 }
 
+// 服务器配置
+// 端口
 const PORT = Number(process.env.AGENT_PORT || 8787)
+// API Key
 const API_KEY = process.env.AGENT_API_KEY || process.env.OPENAI_API_KEY || ''
+// 模型请求地址
 const BASE_URL = (process.env.AGENT_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
+// 模型名称
 const MODEL = process.env.AGENT_MODEL || process.env.OPENAI_MODEL || ''
+// 是否启用 Mock 模式
 const MOCK_MODE = process.env.AGENT_MOCK === '1'
 
+// 协议层白名单
 const ALLOWED_OPERATION_TYPES = [
   'create-text',
   'create-chart',
@@ -29,6 +38,7 @@ const ALLOWED_OPERATION_TYPES = [
   'delete-elements',
 ]
 
+// 图表类型白名单
 const CHART_TYPES = [
   'line',
   'area',
@@ -44,6 +54,7 @@ const CHART_TYPES = [
   'funnel',
 ]
 
+// 系统提示词，Prompt
 const SYSTEM_PROMPT = `你是 Canvas Editor 的画布编辑 Agent。
 
 你的任务是根据用户指令和当前画布上下文，返回结构化画布操作。
@@ -108,6 +119,7 @@ ${CHART_TYPES.join(', ')}
 - 默认使用中文说明。
 - 坐标和尺寸应避免与其他元素大面积重叠。`
 
+// 统一的响应出口，同时解决跨域问题
 const sendJson = (response: ServerResponse, status: number, payload: unknown) => {
   response.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
@@ -118,9 +130,10 @@ const sendJson = (response: ServerResponse, status: number, payload: unknown) =>
   response.end(JSON.stringify(payload))
 }
 
+// 读取请求体并解析为 JSON
 const readJsonBody = async (request: IncomingMessage): Promise<AgentRunBody> => {
-  const chunks: Buffer[] = []
-  let size = 0
+  const chunks: Buffer[] = []                      // 装每一块数据的数组
+  let size = 0                                     // 累计请求体大小
 
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
@@ -133,8 +146,11 @@ const readJsonBody = async (request: IncomingMessage): Promise<AgentRunBody> => 
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as AgentRunBody
 }
 
+// 解析模型返回的 JSON 内容，提取 message 和 operations，把返回的“脏字符串”转换为标准的 JSON 格式
 const parseModelJson = (content: string): { message: string; operations: AgentOperation[] } => {
+  // 去掉首尾空白
   const trimmed = content.trim()
+  // 去掉 Markdown 代码块标记
   const withoutFence = trimmed.startsWith('```')
     ? trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
     : trimmed
@@ -148,6 +164,7 @@ const parseModelJson = (content: string): { message: string; operations: AgentOp
   }
   const operations = Array.isArray(parsed.operations) ? parsed.operations : []
 
+  // 规范化操作列表，确保每个操作都有 id、type、payload，并且 type 在白名单中
   const normalizedOperations = operations.map((operation, index) => {
     if (!operation || typeof operation !== 'object') throw new Error('模型返回了无效操作')
     const record = operation as Record<string, unknown>
@@ -171,6 +188,7 @@ const parseModelJson = (content: string): { message: string; operations: AgentOp
   }
 }
 
+// Mock 模式下的响应生成器，用于测试和开发
 const createMockResponse = (message: string) => {
   if (message.includes('季度') || message.includes('柱状图')) {
     return {
@@ -209,7 +227,9 @@ const createMockResponse = (message: string) => {
   }
 }
 
+// 接收前端请求，组装 Prompt，调用大模型，解析并返回结构化操作
 const handleAgentRun = async (request: IncomingMessage, response: ServerResponse) => {
+  // 读取请求体，校验 message
   const body = await readJsonBody(request)
   const message = body.message?.trim()
   if (!message) {
@@ -217,11 +237,13 @@ const handleAgentRun = async (request: IncomingMessage, response: ServerResponse
     return
   }
 
+  // Mock 拦截
   if (MOCK_MODE) {
     sendJson(response, 200, createMockResponse(message))
     return
   }
 
+  // 检查 API 配置
   if (!API_KEY || !MODEL) {
     sendJson(response, 500, {
       error: 'Agent 服务未配置，请设置 AGENT_API_KEY 与 AGENT_MODEL',
@@ -229,21 +251,23 @@ const handleAgentRun = async (request: IncomingMessage, response: ServerResponse
     return
   }
 
+  // 组装历史对话，最多保留最近 8 条
   const history = (body.history ?? []).slice(-8).map((item) => ({
     role: item.role,
     content: item.content,
   }))
 
+  // 调用大模型
   const upstream = await fetch(`${BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${API_KEY}`,
+      Authorization: `Bearer ${API_KEY}`,            // LLM API 鉴权标准
     },
     body: JSON.stringify({
       model: MODEL,
-      temperature: 0.2,
-      response_format: { type: 'json_object' },
+      temperature: 0.2,                              // 温度参数，0：完全确定，1：高随机，2：非常随机
+      response_format: { type: 'json_object' },      // 强制 JSON
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         ...history,
@@ -258,6 +282,7 @@ const handleAgentRun = async (request: IncomingMessage, response: ServerResponse
     }),
   })
 
+  // 检查上游响应
   const result = (await upstream.json().catch(() => null)) as
     | {
         choices?: Array<{ message?: { content?: string } }>
@@ -265,6 +290,7 @@ const handleAgentRun = async (request: IncomingMessage, response: ServerResponse
       }
     | null
 
+  // 请求失败，返回错误信息
   if (!upstream.ok) {
     sendJson(response, upstream.status, {
       error: result?.error?.message || `模型请求失败：${upstream.status}`,
@@ -272,6 +298,7 @@ const handleAgentRun = async (request: IncomingMessage, response: ServerResponse
     return
   }
 
+  // 提取模型返回的内容
   const content = result?.choices?.[0]?.message?.content
   if (!content) {
     sendJson(response, 502, { error: '模型没有返回内容' })
@@ -281,28 +308,33 @@ const handleAgentRun = async (request: IncomingMessage, response: ServerResponse
   sendJson(response, 200, parseModelJson(content))
 }
 
+// 创建 HTTP 服务器，处理请求
 const server = createServer(async (request, response) => {
   if (!request.url) return
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`)
 
+  // CORS 预检请求，直接返回 204
   if (request.method === 'OPTIONS') {
     sendJson(response, 204, {})
     return
   }
 
+  // 健康检查接口
   if (request.method === 'GET' && url.pathname === '/api/health') {
     sendJson(response, 200, {
-      ok: true,
-      mock: MOCK_MODE,
-      modelConfigured: Boolean(API_KEY && MODEL),
+      ok: true,                                         // 服务是否正常
+      mock: MOCK_MODE,                                  // 是否启用 Mock 模式
+      modelConfigured: Boolean(API_KEY && MODEL),       // 模型是否配置
     })
     return
   }
 
+  // 业务接口：运行 Agent，返回结构化操作
   if (request.method === 'POST' && url.pathname === '/api/agent/run') {
     try {
       await handleAgentRun(request, response)
     } catch (error) {
+      // 处理异常情况
       const message = error instanceof Error ? error.message : 'Agent 服务异常'
       sendJson(response, 500, { error: message })
     }
