@@ -5,6 +5,7 @@ import type {
   ViewportState,
 } from '@/core/types'
 
+// 将 CanvasElement 转换为 AgentCanvasElementSummary
 const summarizeElement = (element: CanvasElement): AgentCanvasElementSummary => ({
   id: element.id,
   type: element.type,
@@ -20,6 +21,7 @@ const summarizeElement = (element: CanvasElement): AgentCanvasElementSummary => 
   tableColumns: element.table?.columns,
 })
 
+// 把画布当前状态打包成Agent能够理解的上下文对象，发给后端/LLM
 export const createAgentCanvasContext = (
   elements: CanvasElement[],
   selectedIds: string[],

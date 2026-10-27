@@ -77,9 +77,9 @@ export interface TableConfig {
   rows: number
   columns: number
   cells: string[][]
-  headerRow?: boolean
-  columnWidths?: number[]
-  rowHeights?: number[]
+  headerRow?: boolean              // 首行是否作为表头行，默认 false
+  columnWidths?: number[]          // 每列宽度权重，数组长度应与 columns 相同，非数字值或小于等于 0 的值返回 1
+  rowHeights?: number[]            // 注意这里是权重，即为“标准宽”的几倍，相对比例
 }
 
 /**

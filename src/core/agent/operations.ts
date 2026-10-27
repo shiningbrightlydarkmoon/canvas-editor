@@ -10,6 +10,7 @@ import type { useCanvasStore } from '@/core/store/canvas'
 
 type CanvasStore = ReturnType<typeof useCanvasStore>
 
+// Agent 创建文本元素时用的默认样式
 const DEFAULT_TEXT_STYLE: ElementStyle = {
   fill: 'transparent',
   stroke: 'transparent',
@@ -19,6 +20,7 @@ const DEFAULT_TEXT_STYLE: ElementStyle = {
   color: '#273449',
 }
 
+// 算新元素默认放在哪里， 避免和现有元素重叠
 const getDefaultPosition = (elements: CanvasElement[]) => {
   if (elements.length === 0) return { x: 120, y: 120 }
   const maxX = Math.max(...elements.map((element) => element.x + element.width))
@@ -26,9 +28,11 @@ const getDefaultPosition = (elements: CanvasElement[]) => {
   return { x: maxX + 40, y: minY }
 }
 
+// 将未知值转换为数字，如果不是有效数字则返回默认值
 const asNumber = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback
 
+// 过滤 LLM 返回的 patch， 只保留“允许修改”的字段
 const sanitizeElementPatch = (patch: Partial<CanvasElement>): Partial<CanvasElement> => {
   const allowedKeys: Array<keyof CanvasElement> = [
     'name',
@@ -48,6 +52,7 @@ const sanitizeElementPatch = (patch: Partial<CanvasElement>): Partial<CanvasElem
     'table',
   ]
 
+  // Object.fromEntries: 把键值对数组转换为对象
   return Object.fromEntries(
     allowedKeys
       .filter((key) => key in patch)
@@ -55,24 +60,28 @@ const sanitizeElementPatch = (patch: Partial<CanvasElement>): Partial<CanvasElem
   ) as Partial<CanvasElement>
 }
 
+// 告诉调用方哪些元素被添加了，哪些元素被修改了
 export interface AgentApplyResult {
   addedIds: string[]
   affectedIds: string[]
 }
 
+// 把 Agent 操作列表翻译成画布的批量更改
+// 一次写入，一条历史记录
 export const applyAgentOperations = (
   store: CanvasStore,
   operations: AgentOperation[],
 ): AgentApplyResult => {
   const elements = store.getAllElements()
   const defaultPosition = getDefaultPosition(elements)
-  const additions: CreateElementInput[] = []
-  const updates: Array<{ id: string; updates: Partial<CanvasElement> }> = []
-  const deletions: string[] = []
-  const affectedIds: string[] = []
+  const additions: CreateElementInput[] = []                                      // 要新增的元素
+  const updates: Array<{ id: string; updates: Partial<CanvasElement> }> = []      // 要更新的元素
+  const deletions: string[] = []                                                  // 要删除的元素 ID
+  const affectedIds: string[] = []                                                // 受影响的元素 ID
 
   operations.forEach((operation) => {
     switch (operation.type) {
+      // 创建文本元素
       case 'create-text': {
         additions.push({
           type: 'text',
@@ -87,6 +96,7 @@ export const applyAgentOperations = (
         break
       }
 
+      // 创建图表元素
       case 'create-chart': {
         const data = normalizeChartData(operation.payload.data)
         if (data.columns.length === 0 || data.rows.length === 0) {
@@ -118,6 +128,7 @@ export const applyAgentOperations = (
         break
       }
 
+      // 创建表格元素
       case 'create-table': {
         const rows = Math.max(1, operation.payload.cells.length)
         const columns = Math.max(
@@ -151,6 +162,7 @@ export const applyAgentOperations = (
         break
       }
 
+      // 更新元素属性
       case 'update-element': {
         const target = store.getElement(operation.payload.elementId)
         if (!target) throw new Error(`更新失败：元素 ${operation.payload.elementId} 不存在`)
@@ -163,6 +175,7 @@ export const applyAgentOperations = (
         break
       }
 
+      // 更新图表数据和配置
       case 'update-chart-data': {
         const target = store.getElement(operation.payload.elementId)
         if (!target?.chart) throw new Error('更新失败：目标不是可编辑图表')
@@ -174,7 +187,7 @@ export const applyAgentOperations = (
           elementId: _elementId,
           data: _data,
           ...chartUpdates
-        } = operation.payload
+        } = operation.payload               // 排除 data 和 elementId，剩下的就是 chart 配置的更新
         updates.push({
           id: target.id,
           updates: {
@@ -189,6 +202,7 @@ export const applyAgentOperations = (
         break
       }
 
+      // 更新表格数据和配置
       case 'update-table-data': {
         const target = store.getElement(operation.payload.elementId)
         if (!target?.table) throw new Error('更新失败：目标不是可编辑表格')
@@ -213,6 +227,7 @@ export const applyAgentOperations = (
         break
       }
 
+      // 删除元素
       case 'delete-elements': {
         operation.payload.elementIds.forEach((id) => {
           const target = store.getElement(id)
@@ -224,6 +239,7 @@ export const applyAgentOperations = (
         break
       }
 
+      // 兜底处理，确保 switch 是穷尽的
       default: {
         const exhaustive: never = operation
         throw new Error(`不支持的 Agent 操作：${String(exhaustive)}`)
