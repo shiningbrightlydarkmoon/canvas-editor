@@ -101,8 +101,9 @@ export const createChartRuntime = (
           lazyUpdate: false,
         },
       )
-      chart.getZr().flush()           // 强制立即渲染，setOption 是异步的，需要确保 canvas 上的像素已经落盘
-      refreshAfterRender()
+      // setOption 只是把画面置脏；flush 会同步触发 'rendered' 事件，
+      // 纹理刷新由监听 rendered 的 refreshAfterRender 负责，这里不要再手动调一次。
+      chart.getZr().flush()
     } catch (error) {
       console.error('[ECharts] 图表渲染失败:', error)
     }

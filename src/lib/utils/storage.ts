@@ -1,23 +1,25 @@
 import type { CanvasElement } from '@/core/types'
 
-const DB_NAME = 'CanvasEditorDB'                     // IndexedDB 数据库名称
-const STORE_NAME = 'snapshots'                       // IndexedDB 对象仓库名称
-const DB_VERSION = 1                                 // IndexedDB 数据库版本
-const DATA_KEY = 'current_canvas'                    // 数据存储的 Key，用于标识当前画布的状态
+const DB_NAME = 'CanvasEditorDB' // IndexedDB 数据库名称
+const STORE_NAME = 'canvases' // 对象仓库：整份画布数据
+const LEGACY_STORE = 'snapshots' // 旧版本仓库名（仅用于迁移，新代码不再写入）
+const DB_VERSION = 2 // v1 用 snapshots，v2 改名 canvases
+const DATA_KEY = 'current_canvas' // 单条记录的 key
+
+type CanvasRecord = Record<string, CanvasElement>
 
 /**
- * 打开数据库连接
+ * 打开数据库连接。
+ * v2 升级时只新建 canvases 仓库，旧 snapshots 仓库先保留，供 loadFromDB 回退读取。
  */
 const openDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
-    // 打开 IndexedDB 数据库连接
     const request = indexedDB.open(DB_NAME, DB_VERSION)
 
-    request.onerror = () => reject(request.error)            // 连接失败时，返回错误
-    request.onsuccess = () => resolve(request.result)        // 连接成功时，返回数据库实例
-    // 处理首次创建/升级数据库的情况，创建对象仓库
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => resolve(request.result)
+    request.onupgradeneeded = () => {
+      const db = request.result
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME)
       }
@@ -25,53 +27,78 @@ const openDB = (): Promise<IDBDatabase> => {
   })
 }
 
+/** 从指定仓库读一条记录 */
+const readStore = (db: IDBDatabase, storeName: string): Promise<CanvasRecord | null> => {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, 'readonly')
+    const request = transaction.objectStore(storeName).get(DATA_KEY)
+    request.onsuccess = () => resolve((request.result as CanvasRecord) ?? null)
+    request.onerror = () => reject(request.error)
+  })
+}
+
 /**
- * 保存画布数据
+ * 保存画布数据（整份覆盖）。
+ * 注意：调用方传入的必须是普通对象，不能是 Vue 的响应式 Proxy，
+ * 否则 IndexedDB 的结构化克隆会抛 DataCloneError。
  */
-export const saveToDB = async (data: Record<string, CanvasElement>): Promise<void> => {
+export const saveToDB = async (data: CanvasRecord): Promise<void> => {
+  let opened: IDBDatabase
   try {
-    const db = await openDB()
-    return new Promise((resolve, reject) => {
-      // 开启一个事务 (Transaction)
-      // 模式为 'readwrite' (读写模式)，因为我们要写入数据
+    opened = await openDB()
+  } catch (err) {
+    console.error('IndexedDB 打开失败:', err)
+    return
+  }
+
+  const db = opened
+  try {
+    await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction(STORE_NAME, 'readwrite')
-      // 获取对象仓库 (Store)
-      const store = transaction.objectStore(STORE_NAME)
+      transaction.objectStore(STORE_NAME).put(data, DATA_KEY)
 
-      // 把整个 elements 对象作为一个大 JSON 存进去
-      // put 方法的意思是：如果 key 不存在就新增，如果存在就覆盖 (Upsert)
-      // 我们把整个 data 对象存进去，主键是 'current_canvas'
-      const request = store.put(data, DATA_KEY)
-
-      request.onsuccess = () => resolve()
-      request.onerror = () => reject(request.error)
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error)
+      transaction.onabort = () => reject(transaction.error)
     })
   } catch (err) {
     console.error('IndexedDB 保存失败:', err)
+  } finally {
+    // 事务结束就关闭连接，避免长时间持有导致「连接数过多」
+    db.close()
   }
 }
 
 /**
- * 读取画布数据
+ * 读取画布数据。
+ * 先读新仓库 canvases；读不到说明是旧版本数据，回退读 snapshots 并迁移过来。
  */
-export const loadFromDB = async (): Promise<Record<string, CanvasElement> | null> => {
+export const loadFromDB = async (): Promise<CanvasRecord | null> => {
+  let opened: IDBDatabase
   try {
-    const db = await openDB()
-    return new Promise((resolve, reject) => {
-      // 只读模式
-      const transaction = db.transaction(STORE_NAME, 'readonly')
-      const store = transaction.objectStore(STORE_NAME)
-      // 发起查询请求
-      // 根据固定的 Key ('current_canvas') 去查找数据
-      const request = store.get(DATA_KEY)
+    opened = await openDB()
+  } catch (err) {
+    console.error('IndexedDB 打开失败:', err)
+    return null
+  }
 
-      request.onsuccess = () => {
-        resolve(request.result || null)
-      }
-      request.onerror = () => reject(request.error)
-    })
+  const db = opened
+  try {
+    const current = await readStore(db, STORE_NAME)
+    if (current) return current
+
+    // 迁移旧数据
+    if (!db.objectStoreNames.contains(LEGACY_STORE)) return null
+    const legacy = await readStore(db, LEGACY_STORE)
+    if (legacy) {
+      await saveToDB(legacy)
+      console.info('[storage] 已把旧仓库 snapshots 的数据迁移到 canvases')
+    }
+    return legacy
   } catch (err) {
     console.error('IndexedDB 读取失败:', err)
     return null
+  } finally {
+    db.close()
   }
 }
