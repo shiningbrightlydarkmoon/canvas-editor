@@ -374,7 +374,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import {
   ChartColumn,
   Circle,
@@ -641,7 +641,14 @@ const removeChartSeries = (key: string) => {
   localYFields.value = localYFields.value.filter((field) => field !== key)
 }
 
+// 标记「正在把 props 同步到本地表单」。
+// syncFromProps 会把 props 的值逐个写进 local* 这些 ref，而下面那个 watch([local*]) 会
+// 因此被触发并向外 emit('change')。但这不是用户编辑，若照常 emit，父组件就会调
+// updateElement，凭空写出一条「值没变」的历史记录 —— 表现为「点一下元素就多一条可撤销记录」。
+let isSyncingFromProps = false
+
 const syncFromProps = () => {
+  isSyncingFromProps = true
   localName.value = props.element.name || ''
   localX.value = props.element.x
   localY.value = props.element.y
@@ -678,6 +685,11 @@ const syncFromProps = () => {
   fontWeight.value = props.element.style.fontWeight ?? 'normal'
   fontStyle.value = props.element.style.fontStyle ?? 'normal'
   textDecoration.value = props.element.style.textDecoration ?? 'none'
+  // 本地 ref 的 watcher 默认是 pre-flush（在本次更新刷新队列里执行），
+  // nextTick 回调排在这次刷新之后，所以能完整覆盖「同步赋值 → watcher 触发」这段窗口。
+  nextTick(() => {
+    isSyncingFromProps = false
+  })
 }
 
 watch(
@@ -723,6 +735,8 @@ watch(
     textDecoration,
   ],
   () => {
+    // 由 syncFromProps 引起的赋值不是用户编辑，直接跳过，避免产生空历史记录
+    if (isSyncingFromProps) return
     emit('change', buildChanges())
   },
 )

@@ -702,6 +702,7 @@ const dragState = {
 // 缩放状态
 const resizeState = {
   active: false, // 是否正在缩放
+  moved: false, // 是否真的缩放过（区分「点击手柄」和「拖拽手柄」）
   elementId: '', // 当前缩放的元素ID
   handle: null as HandleType | null, // 当前缩放手柄类型
   // 鼠标起始位置（世界坐标）
@@ -717,6 +718,7 @@ const resizeState = {
 // 旋转状态
 const rotateState = {
   active: false, // 是否正在旋转
+  moved: false, // 是否真的旋转过
   elementId: '', // 当前旋转的元素ID
   startAngle: 0, // 鼠标起始角度（弧度）
   // 元素中心（世界坐标）
@@ -904,52 +906,65 @@ const commitInteraction = () => {
     tableResizePreview = null
   }
   // 拖拽提交
+  // 注意：pointerdown 点中元素时 dragState.active 就会变成 true，
+  // 所以这里必须再判断 moved，否则「单纯点击选中」也会提交一次、写一条坐标没变的空历史。
   if (dragState.active) {
-    // 多选拖拽
-    if (dragState.isMulti) {
-      dragState.targets.forEach((t) => {
-        const c = elementContainers.get(t.id) // 获取PIXI容器
-        const el = props.elements.find((e) => e.id === t.id) // 获取元素数据
+    if (dragState.moved) {
+      // 多选拖拽
+      if (dragState.isMulti) {
+        dragState.targets.forEach((t) => {
+          const c = elementContainers.get(t.id) // 获取PIXI容器
+          const el = props.elements.find((e) => e.id === t.id) // 获取元素数据
+          if (c && el) {
+            store.updateElement(t.id, {
+              x: c.x - el.width / 2,
+              y: c.y - el.height / 2,
+            })
+          }
+        })
+      } else {
+        const c = elementContainers.get(dragState.elementId)
+        const el = props.elements.find((e) => e.id === dragState.elementId)
         if (c && el) {
-          store.updateElement(t.id, {
+          store.updateElement(dragState.elementId, {
             x: c.x - el.width / 2,
             y: c.y - el.height / 2,
           })
         }
-      })
-    } else {
-      const c = elementContainers.get(dragState.elementId)
-      const el = props.elements.find((e) => e.id === dragState.elementId)
-      if (c && el) {
-        store.updateElement(dragState.elementId, { x: c.x - el.width / 2, y: c.y - el.height / 2 })
       }
     }
     dragState.active = false
     dragState.moved = false
   }
-  // 缩放提交
+  // 缩放提交（同样只在真的缩放过时提交）
   if (resizeState.active) {
-    const c = elementContainers.get(resizeState.elementId)
-    if (c) {
-      const newW = resizeState.startW * c.scale.x // 计算新的宽度
-      const newH = resizeState.startH * c.scale.y // 计算新的高度
-      store.updateElement(resizeState.elementId, {
-        x: c.x - newW / 2,
-        y: c.y - newH / 2,
-        width: newW,
-        height: newH,
-      })
+    if (resizeState.moved) {
+      const c = elementContainers.get(resizeState.elementId)
+      if (c) {
+        const newW = resizeState.startW * c.scale.x // 计算新的宽度
+        const newH = resizeState.startH * c.scale.y // 计算新的高度
+        store.updateElement(resizeState.elementId, {
+          x: c.x - newW / 2,
+          y: c.y - newH / 2,
+          width: newW,
+          height: newH,
+        })
+      }
     }
     resizeState.active = false
+    resizeState.moved = false
   }
-  // 旋转提交
+  // 旋转提交（同样只在真的旋转过时提交）
   if (rotateState.active) {
-    const c = elementContainers.get(rotateState.elementId)
-    if (c) {
-      const deg = (c.rotation * 180) / Math.PI // 弧度 -> 角度
-      store.updateElement(rotateState.elementId, { rotation: deg })
+    if (rotateState.moved) {
+      const c = elementContainers.get(rotateState.elementId)
+      if (c) {
+        const deg = (c.rotation * 180) / Math.PI // 弧度 -> 角度
+        store.updateElement(rotateState.elementId, { rotation: deg })
+      }
     }
     rotateState.active = false
+    rotateState.moved = false
   }
   // 清除辅助线
   clearGuides()
@@ -1162,6 +1177,7 @@ const setupCanvasInteraction = () => {
         c.y = y + h / 2
         c.scale.x = w / resizeState.startW
         c.scale.y = h / resizeState.startH
+        resizeState.moved = true // 标记真的缩放过，否则松手时不该提交
       }
     }
 
@@ -1174,7 +1190,10 @@ const setupCanvasInteraction = () => {
       // 如果按住 Shift 键，则角度吸附到 15 度的倍数
       if (event.shiftKey) deg = Math.round(deg / 15) * 15
       const c = elementContainers.get(rotateState.elementId)
-      if (c) c.rotation = (deg * Math.PI) / 180
+      if (c) {
+        c.rotation = (deg * Math.PI) / 180
+        rotateState.moved = true // 标记真的旋转过
+      }
     }
 
     // 框选模式
