@@ -9,6 +9,19 @@ import { createDefaultChartData } from '@/core/charts/normalizeData'
 import { normalizeChartType } from '@/core/charts/registry'
 import { normalizeTableConfig } from '@/core/tables'
 
+// 判断两个值在业务含义上是否相同。
+// 原始值用 Object.is 比较；对象/数组用序列化比较——因为属性面板每次都会构造一个新的
+// style 对象，引用必然不同，但内容可能是完全一致的。
+const isSameValue = (a: unknown, b: unknown): boolean => {
+  if (Object.is(a, b)) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return false
+  }
+}
+
 // 辅助函数，把用户输入的元素数据 CreateElementInput 转换为完整的 CanvasElement 对象
 const createNewElement = (elementData: CreateElementInput): CanvasElement => {
   const now = Date.now()
@@ -92,7 +105,6 @@ export const useCanvasStore = defineStore('canvas', () => {
   // 添加新元素到画布，并返回新元素的 ID。可以选择是否跳过历史记录的保存。
   // 传入参数：元素数据（不完整）， 是否跳过历史记录保存（默认为 false）
   const addElement = (elementData: CreateElementInput, skipHistory = false): string => {
-    const prevState = skipHistory ? {} : deepClone(elements.value) // 是否跳过历史记录保存，如果不跳过则保存当前状态的深拷贝
     const nextZIndex = getMaxZIndex() + 1
     const newElement = createNewElement({
       ...elementData,
@@ -101,7 +113,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     elements.value[newElement.id] = newElement
 
     if (!skipHistory) {
-      historyStore.pushHistory(`添加${newElement.type}元素`, prevState, elements.value, 'add')
+      historyStore.pushHistory(`添加${newElement.type}元素`, elements.value, 'add')
     }
 
     return newElement.id
@@ -117,7 +129,11 @@ export const useCanvasStore = defineStore('canvas', () => {
     }
     if (existingElement.isLocked && updates.isLocked !== false) return false
 
-    const prevState = deepClone(elements.value)
+    // 兜底：这次更新没有任何字段真正发生变化时，不写历史。
+    // 否则「点一下元素松手」这类空操作也会压入一条可撤销记录，用户撤销时会觉得「按了没反应」。
+    const updateKeys = Object.keys(updates) as Array<keyof CanvasElement>
+    const hasActualChange = updateKeys.some((key) => !isSameValue(existingElement[key], updates[key]))
+    if (!hasActualChange) return false
 
     const updatedElement: CanvasElement = {
       ...existingElement, // 复制所有旧属性
@@ -127,7 +143,7 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     elements.value[id] = updatedElement
 
-    historyStore.pushHistory(`更新${updatedElement.type}元素`, prevState, elements.value, 'update')
+    historyStore.pushHistory(`更新${updatedElement.type}元素`, elements.value, 'update')
 
     return true
   }
@@ -147,7 +163,6 @@ export const useCanvasStore = defineStore('canvas', () => {
     const deletions = changes.deletions ?? []
     if (additions.length === 0 && updates.length === 0 && deletions.length === 0) return []
 
-    const prevState = deepClone(elements.value)
     const addedIds: string[] = []
     let nextZIndex = getMaxZIndex()
 
@@ -175,7 +190,7 @@ export const useCanvasStore = defineStore('canvas', () => {
       selectedIds.value = selectedIds.value.filter((selectedId) => selectedId !== id)
     })
 
-    historyStore.pushHistory(description, prevState, elements.value, 'update')
+    historyStore.pushHistory(description, elements.value, 'update')
     return addedIds
   }
 
@@ -185,11 +200,10 @@ export const useCanvasStore = defineStore('canvas', () => {
     if (!element) return false
     if (element.isLocked) return false
 
-    const prevState = deepClone(elements.value)
     delete elements.value[id]
     selectedIds.value = selectedIds.value.filter((selectedId) => selectedId !== id)
 
-    historyStore.pushHistory(`删除${element.type}元素`, prevState, elements.value, 'delete')
+    historyStore.pushHistory(`删除${element.type}元素`, elements.value, 'delete')
 
     return true
   }
@@ -199,7 +213,6 @@ export const useCanvasStore = defineStore('canvas', () => {
     const selectedCount = selectedIds.value.length
     if (selectedCount === 0) return 0
 
-    const prevState = deepClone(elements.value)
     const idsToDelete = [...selectedIds.value] // 复制选中列表，防止在循环中修改原数组导致问题
 
     idsToDelete.forEach((id) => {
@@ -211,7 +224,7 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     selectedIds.value = []
 
-    historyStore.pushHistory(`删除${selectedCount}个元素`, prevState, elements.value, 'delete')
+    historyStore.pushHistory(`删除${selectedCount}个元素`, elements.value, 'delete')
 
     return selectedCount
   }
@@ -221,7 +234,6 @@ export const useCanvasStore = defineStore('canvas', () => {
     const selected = selectedElements.value
     if (selected.length === 0) return
 
-    const prevState = deepClone(elements.value)
     let currentMax = getMaxZIndex()
 
     selected.forEach((el) => {
@@ -234,7 +246,7 @@ export const useCanvasStore = defineStore('canvas', () => {
       }
     })
 
-    historyStore.pushHistory('置顶元素', prevState, elements.value, 'update')
+    historyStore.pushHistory('置顶元素', elements.value, 'update')
   }
 
   // 将选中的元素置底，即将它们的 zIndex 设置为当前最小值 - 1
@@ -242,7 +254,6 @@ export const useCanvasStore = defineStore('canvas', () => {
     const selected = selectedElements.value
     if (selected.length === 0) return
 
-    const prevState = deepClone(elements.value)
     let currentMin = getMinZIndex()
 
     selected.forEach((el) => {
@@ -255,7 +266,7 @@ export const useCanvasStore = defineStore('canvas', () => {
       }
     })
 
-    historyStore.pushHistory('置底元素', prevState, elements.value, 'update')
+    historyStore.pushHistory('置底元素', elements.value, 'update')
   }
 
   // 根据元素 ID 获取单个元素对象，如果不存在则返回 null
@@ -337,7 +348,6 @@ export const useCanvasStore = defineStore('canvas', () => {
   const pasteElements = (): number => {
     if (!canPaste()) return 0
 
-    const prevState = deepClone(elements.value)
     const pastedElements = clipboardStore.paste()
 
     pastedElements.forEach((element: CanvasElement) => {
@@ -345,12 +355,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     })
 
     if (pastedElements.length > 0) {
-      historyStore.pushHistory(
-        `粘贴${pastedElements.length}个元素`,
-        prevState,
-        elements.value,
-        'add',
-      )
+      historyStore.pushHistory(`粘贴${pastedElements.length}个元素`, elements.value, 'add')
 
       selectMultiple(pastedElements.map((el) => el.id))
     }
@@ -443,6 +448,8 @@ export const useCanvasStore = defineStore('canvas', () => {
         ]),
       )
       selectedIds.value = []
+      // 把「打开画布时的样子」设为历史基线，这样第一次撤销不会退到空画布
+      historyStore.setInitialState(elements.value)
       return
     } else {
       console.log('无存档，加载默认示例')
@@ -529,6 +536,10 @@ export const useCanvasStore = defineStore('canvas', () => {
       },
       true,
     )
+
+    // 示例数据是用 skipHistory 建出来的，不该进历史；把它们设为基线，
+    // 于是「第一次撤销」回到的就是刚打开时看到的这套示例内容。
+    historyStore.setInitialState(elements.value)
   }
 
   return {
