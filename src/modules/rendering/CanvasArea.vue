@@ -247,7 +247,7 @@ const truncateTableText = (value: string, maxWidth: number, fontSize: number): s
 }
 
 // 表格使用 Graphics 自绘网格，单元格文本作为独立 Text 层渲染
-// 这样表格仍然是一个普通元素容器，可直接复用拖拽、缩放、旋转和历史快照。
+// 这样表格仍然是一个普通元素容器，可直接复用拖拽、缩放、旋转和撤销重做。
 const renderTable = (
   container: PIXI.Container,
   graphics: PIXI.Graphics,
@@ -753,7 +753,6 @@ const boxSelectState = {
 const ALIGN_THRESHOLD = 5
 // 辅助线图形对象
 let guideGraphics: PIXI.Graphics | null = null
-// let currentGuides: { orientation: 'v' | 'h'; position: number }[] = []
 
 // 手动双击检测—— PixiJS 的 pointerdblclick 在容器重建时不可靠
 let lastDblClickTime = 0
@@ -910,18 +909,15 @@ const commitInteraction = () => {
   // 所以这里必须再判断 moved，否则「单纯点击选中」也会提交一次、写一条坐标没变的空历史。
   if (dragState.active) {
     if (dragState.moved) {
-      // 多选拖拽
+      // 多选拖拽：整批合成一次事务，撤销一次即可全部回去
       if (dragState.isMulti) {
-        dragState.targets.forEach((t) => {
+        const changes = dragState.targets.flatMap((t) => {
           const c = elementContainers.get(t.id) // 获取PIXI容器
           const el = props.elements.find((e) => e.id === t.id) // 获取元素数据
-          if (c && el) {
-            store.updateElement(t.id, {
-              x: c.x - el.width / 2,
-              y: c.y - el.height / 2,
-            })
-          }
+          if (!c || !el) return []
+          return [{ id: t.id, updates: { x: c.x - el.width / 2, y: c.y - el.height / 2 } }]
         })
+        store.updateElements(changes, `移动${changes.length}个元素`)
       } else {
         const c = elementContainers.get(dragState.elementId)
         const el = props.elements.find((e) => e.id === dragState.elementId)

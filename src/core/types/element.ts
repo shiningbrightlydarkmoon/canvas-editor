@@ -71,7 +71,7 @@ export interface ChartConfig {
 
 /**
  * 表格配置
- * cells 使用二维字符串数组直接内嵌在元素中，便于快照、撤销和持久化。
+ * cells 使用二维字符串数组直接内嵌在元素中，便于撤销和持久化。
  */
 export interface TableConfig {
   rows: number

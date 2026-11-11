@@ -4,6 +4,7 @@ import type { CanvasElement, ViewportState, CreateElementInput } from '@/core/ty
 import { generateId, deepClone, debounce } from '@/lib/utils/id'
 import { useClipboardStore } from './clipboard'
 import { useHistoryStore } from './history'
+import { applyCommand, diffToCommand, revertCommand } from './commands'
 import { saveToDB, loadFromDB } from '@/lib/utils/storage'
 import { createDefaultChartData } from '@/core/charts/normalizeData'
 import { normalizeChartType } from '@/core/charts/registry'
@@ -57,7 +58,17 @@ export const useCanvasStore = defineStore('canvas', () => {
   const selectedIds = ref<string[]>([]) // 存储当前选中的元素 ID 数组
   const viewport = ref<ViewportState>({ zoom: 1, x: 0, y: 0 }) // 存储画布的视口状态，包括缩放比例和偏移量
   const clipboardStore = useClipboardStore() // 引用剪贴板存储，用于处理复制、剪切和粘贴操作
-  const historyStore = useHistoryStore() // 引用历史记录存储，用于处理撤销和重做操作
+  const historyStore = useHistoryStore()
+
+  // 事务执行：入口记一份元素引用的浅拷贝，出口按引用差异推导命令。
+  // 元素不可变（只整体替换，不原地改字段），所以引用不同就等于内容不同，
+  // 不需要深拷贝；即使某个入口忘了记录，diff 也能自动兜住。
+  const runCommand = (description: string, mutate: () => void): void => {
+    const before = { ...elements.value }
+    mutate()
+    const command = diffToCommand(before, elements.value)
+    if (command) historyStore.record(description, command)
+  } // 引用历史记录存储，用于处理撤销和重做操作
 
   // 计算属性，返回当前选中的元素对象数组，并按 zIndex 排序
   const selectedElements = computed((): CanvasElement[] => {
@@ -110,10 +121,12 @@ export const useCanvasStore = defineStore('canvas', () => {
       ...elementData,
       zIndex: nextZIndex,
     })
-    elements.value[newElement.id] = newElement
-
-    if (!skipHistory) {
-      historyStore.pushHistory(`添加${newElement.type}元素`, elements.value, 'add')
+    if (skipHistory) {
+      elements.value[newElement.id] = newElement
+    } else {
+      runCommand(`添加${newElement.type}元素`, () => {
+        elements.value[newElement.id] = newElement
+      })
     }
 
     return newElement.id
@@ -141,11 +154,33 @@ export const useCanvasStore = defineStore('canvas', () => {
       updatedAt: Date.now(), // 更新时间戳
     }
 
-    elements.value[id] = updatedElement
-
-    historyStore.pushHistory(`更新${updatedElement.type}元素`, elements.value, 'update')
+    runCommand(`更新${updatedElement.type}元素`, () => {
+      elements.value[id] = updatedElement
+    })
 
     return true
+  }
+
+  // 批量更新属性：整批只写一条历史（多选拖拽、批量对齐这类「一次用户意图」）
+  const updateElements = (
+    changes: Array<{ id: string; updates: Partial<CanvasElement> }>,
+    description?: string,
+  ): void => {
+    const valid = changes.filter(({ id }) => Boolean(elements.value[id]))
+    if (valid.length === 0) return
+
+    runCommand(description ?? `更新${valid.length}个元素`, () => {
+      valid.forEach(({ id, updates: elementUpdates }) => {
+        const existing = elements.value[id]
+        if (!existing) return
+        if (existing.isLocked && elementUpdates.isLocked !== false) return
+        elements.value[id] = {
+          ...existing,
+          ...elementUpdates,
+          updatedAt: Date.now(),
+        }
+      })
+    })
   }
 
   // 批量应用一组变更，供 Agent 等自动化流程使用。
@@ -164,33 +199,35 @@ export const useCanvasStore = defineStore('canvas', () => {
     if (additions.length === 0 && updates.length === 0 && deletions.length === 0) return []
 
     const addedIds: string[] = []
-    let nextZIndex = getMaxZIndex()
 
-    additions.forEach((input) => {
-      nextZIndex += 1
-      const element = createNewElement({ ...input, zIndex: input.zIndex ?? nextZIndex })
-      elements.value[element.id] = element
-      addedIds.push(element.id)
+    runCommand(description, () => {
+      let nextZIndex = getMaxZIndex()
+
+      additions.forEach((input) => {
+        nextZIndex += 1
+        const element = createNewElement({ ...input, zIndex: input.zIndex ?? nextZIndex })
+        elements.value[element.id] = element
+        addedIds.push(element.id)
+      })
+
+      updates.forEach(({ id, updates: elementUpdates }) => {
+        const existing = elements.value[id]
+        if (!existing || existing.isLocked) return
+        elements.value[id] = {
+          ...existing,
+          ...elementUpdates,
+          updatedAt: Date.now(),
+        }
+      })
+
+      deletions.forEach((id) => {
+        const existing = elements.value[id]
+        if (!existing || existing.isLocked) return
+        delete elements.value[id]
+        selectedIds.value = selectedIds.value.filter((selectedId) => selectedId !== id)
+      })
     })
 
-    updates.forEach(({ id, updates: elementUpdates }) => {
-      const existing = elements.value[id]
-      if (!existing || existing.isLocked) return
-      elements.value[id] = {
-        ...existing,
-        ...elementUpdates,
-        updatedAt: Date.now(),
-      }
-    })
-
-    deletions.forEach((id) => {
-      const existing = elements.value[id]
-      if (!existing || existing.isLocked) return
-      delete elements.value[id]
-      selectedIds.value = selectedIds.value.filter((selectedId) => selectedId !== id)
-    })
-
-    historyStore.pushHistory(description, elements.value, 'update')
     return addedIds
   }
 
@@ -200,10 +237,10 @@ export const useCanvasStore = defineStore('canvas', () => {
     if (!element) return false
     if (element.isLocked) return false
 
-    delete elements.value[id]
-    selectedIds.value = selectedIds.value.filter((selectedId) => selectedId !== id)
-
-    historyStore.pushHistory(`删除${element.type}元素`, elements.value, 'delete')
+    runCommand(`删除${element.type}元素`, () => {
+      delete elements.value[id]
+      selectedIds.value = selectedIds.value.filter((selectedId) => selectedId !== id)
+    })
 
     return true
   }
@@ -215,58 +252,71 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     const idsToDelete = [...selectedIds.value] // 复制选中列表，防止在循环中修改原数组导致问题
 
-    idsToDelete.forEach((id) => {
-      const element = elements.value[id]
-      if (element && !element.isLocked) {
-        delete elements.value[id]
-      }
+    runCommand(`删除${selectedCount}个元素`, () => {
+      idsToDelete.forEach((id) => {
+        const element = elements.value[id]
+        if (element && !element.isLocked) {
+          delete elements.value[id]
+        }
+      })
+      selectedIds.value = []
     })
-
-    selectedIds.value = []
-
-    historyStore.pushHistory(`删除${selectedCount}个元素`, elements.value, 'delete')
 
     return selectedCount
   }
 
-  // 将选中的元素置顶，即将它们的 zIndex 设置为当前最大值 + 1
-  const bringToFront = (): void => {
-    const selected = selectedElements.value
-    if (selected.length === 0) return
-
-    let currentMax = getMaxZIndex()
-
-    selected.forEach((el) => {
-      if (el.isLocked) return
-      currentMax += 1
-      const targetElement = elements.value[el.id] // 获取当前元素的引用
-      if (targetElement) {
-        targetElement.zIndex = currentMax
-        targetElement.updatedAt = Date.now()
-      }
-    })
-
-    historyStore.pushHistory('置顶元素', elements.value, 'update')
+  // 判断选中的这批元素是不是已经占据了「最高/最低」的那一段层级。
+  // 层级只看相对顺序：已经贴顶了再点置顶，不该产生任何变化，也不该写历史。
+  const isAlreadyAtEdge = (ids: string[], edge: 'top' | 'bottom'): boolean => {
+    const all = Object.values(elements.value)
+    if (all.length === 0) return true
+    const sorted = [...all].sort((a, b) =>
+      edge === 'top' ? (b.zIndex || 0) - (a.zIndex || 0) : (a.zIndex || 0) - (b.zIndex || 0),
+    )
+    // 取同样的数量，看前 k 个是不是全都在选中集合里
+    return sorted.slice(0, ids.length).every((el) => ids.includes(el.id))
   }
 
-  // 将选中的元素置底，即将它们的 zIndex 设置为当前最小值 - 1
-  const sendToBack = (): void => {
-    const selected = selectedElements.value
+  // 将选中的元素置顶
+  const bringToFront = (): void => {
+    const selected = selectedElements.value.filter((el) => !el.isLocked)
     if (selected.length === 0) return
 
-    let currentMin = getMinZIndex()
+    const ids = selected.map((el) => el.id)
+    // 已经在最上层 → 空操作（不写历史，也不让 zIndex 无意义地增长）
+    if (isAlreadyAtEdge(ids, 'top')) return
 
-    selected.forEach((el) => {
-      if (el.isLocked) return
-      currentMin -= 1
-      const targetElement = elements.value[el.id]
-      if (targetElement) {
-        targetElement.zIndex = currentMin
-        targetElement.updatedAt = Date.now()
-      }
+    runCommand('置顶元素', () => {
+      let currentMax = getMaxZIndex()
+      ids.forEach((id) => {
+        const targetElement = elements.value[id]
+        if (!targetElement) return
+        currentMax += 1
+        // 不可变：替换整个对象，而不是原地改 zIndex
+        elements.value[id] = { ...targetElement, zIndex: currentMax, updatedAt: Date.now() }
+      })
     })
+  }
 
-    historyStore.pushHistory('置底元素', elements.value, 'update')
+  // 将选中的元素置底
+  const sendToBack = (): void => {
+    const selected = selectedElements.value.filter((el) => !el.isLocked)
+    if (selected.length === 0) return
+
+    const ids = selected.map((el) => el.id)
+    // 已经在最下层 → 空操作
+    if (isAlreadyAtEdge(ids, 'bottom')) return
+
+    runCommand('置底元素', () => {
+      let currentMin = getMinZIndex()
+      ids.forEach((id) => {
+        const targetElement = elements.value[id]
+        if (!targetElement) return
+        currentMin -= 1
+        // 不可变：替换整个对象，而不是原地改 zIndex
+        elements.value[id] = { ...targetElement, zIndex: currentMin, updatedAt: Date.now() }
+      })
+    })
   }
 
   // 根据元素 ID 获取单个元素对象，如果不存在则返回 null
@@ -292,21 +342,18 @@ export const useCanvasStore = defineStore('canvas', () => {
     } else {
       selectedIds.value = [id]
     }
-
-    updateElementsSelectionState()
+    // 选中态只保留 selectedIds 一个真相源；渲染层按 id 自行判断。
   }
 
   // 选择多个元素
   const selectMultiple = (ids: string[]): void => {
     const validIds = ids.filter((id) => elements.value[id])
     selectedIds.value = validIds
-    updateElementsSelectionState()
   }
 
   // 清楚选中
   const clearSelection = (): void => {
     selectedIds.value = []
-    updateElementsSelectionState()
   }
 
   // 切换元素的选中状态，如果当前已选中则取消选中，否则添加到选中列表
@@ -316,16 +363,6 @@ export const useCanvasStore = defineStore('canvas', () => {
     } else {
       selectElement(id, true)
     }
-  }
-
-  // 更新所有元素的 isSelected 状态，以确保它们与 selectedIds 保持一致
-  const updateElementsSelectionState = (): void => {
-    Object.keys(elements.value).forEach((id) => {
-      const element = elements.value[id]
-      if (element) {
-        element.isSelected = selectedIds.value.includes(id)
-      }
-    })
   }
 
   // 复制选中的元素
@@ -350,14 +387,13 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     const pastedElements = clipboardStore.paste()
 
-    pastedElements.forEach((element: CanvasElement) => {
-      elements.value[element.id] = element
-    })
-
     if (pastedElements.length > 0) {
-      historyStore.pushHistory(`粘贴${pastedElements.length}个元素`, elements.value, 'add')
-
-      selectMultiple(pastedElements.map((el) => el.id))
+      runCommand(`粘贴${pastedElements.length}个元素`, () => {
+        pastedElements.forEach((element: CanvasElement) => {
+          elements.value[element.id] = element
+        })
+        selectedIds.value = pastedElements.map((el) => el.id)
+      })
     }
 
     return pastedElements.length
@@ -370,18 +406,18 @@ export const useCanvasStore = defineStore('canvas', () => {
 
   // 撤销
   const undo = (): void => {
-    const prevState = historyStore.undo()
-    if (prevState) {
-      elements.value = deepClone(prevState)
+    const command = historyStore.undo()
+    if (command) {
+      revertCommand(elements.value, command)
       clearSelection()
     }
   }
 
   // 重做
   const redo = (): void => {
-    const nextState = historyStore.redo()
-    if (nextState) {
-      elements.value = deepClone(nextState)
+    const command = historyStore.redo()
+    if (command) {
+      applyCommand(elements.value, command)
       clearSelection()
     }
   }
@@ -403,7 +439,7 @@ export const useCanvasStore = defineStore('canvas', () => {
   }
 
   // 防抖保存到 IndexedDB，避免频繁写入
-  // 使用 deepClone 确保保存的是元素的快照，而不是引用
+  // 使用 deepClone 转成普通对象：既脱离响应式引用，也保证可被结构化克隆
   // 参数 newVal 是当前元素的状态对象
   const debouncedSave = debounce(async (newVal: Record<string, CanvasElement>) => {
     await saveToDB(deepClone(newVal))
@@ -448,8 +484,8 @@ export const useCanvasStore = defineStore('canvas', () => {
         ]),
       )
       selectedIds.value = []
-      // 把「打开画布时的样子」设为历史基线，这样第一次撤销不会退到空画布
-      historyStore.setInitialState(elements.value)
+      // 打开画布时清空历史：第一次撤销不会退到空画布
+      historyStore.clearHistory()
       return
     } else {
       console.log('无存档，加载默认示例')
@@ -537,9 +573,9 @@ export const useCanvasStore = defineStore('canvas', () => {
       true,
     )
 
-    // 示例数据是用 skipHistory 建出来的，不该进历史；把它们设为基线，
-    // 于是「第一次撤销」回到的就是刚打开时看到的这套示例内容。
-    historyStore.setInitialState(elements.value)
+    // 示例数据是用 skipHistory 建出来的，不该进历史；清空历史即可，
+    // 于是「第一次撤销」不会发生（canUndo 为 false）。
+    historyStore.clearHistory()
   }
 
   return {
@@ -554,6 +590,7 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     addElement,
     updateElement,
+    updateElements,
     applyElementBatch,
     deleteElement,
     deleteSelectedElements,

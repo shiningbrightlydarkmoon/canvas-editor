@@ -79,20 +79,4 @@ export const deepClone = <T>(obj: T): T => {
   return cloned
 }
 
-/**
- * 生成随机颜色
- * @returns 随机颜色的十六进制字符串
- */
-export const generateRandomColor = (): string => {
-  const letters = '0123456789ABCDEF';
-  let color = '#';
-  for (let i = 0; i < 6; i++) {
-    color += letters[Math.floor(Math.random() * 16)];
-  }
-  return color;
-}
-
-// export const generateRandomColor = (): string => {
-//   return `#${Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0')}`;
-// }
 
