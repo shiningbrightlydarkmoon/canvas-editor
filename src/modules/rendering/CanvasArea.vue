@@ -86,6 +86,12 @@ const emit = defineEmits<{
 const canvasRef = ref<HTMLCanvasElement>()
 let app: PIXI.Application | null = null
 const elementContainers = new Map<string, PIXI.Container>() // 存储每个元素的PIXI容器，key为元素ID
+// 增量渲染用：记录「上次渲染用的是哪个元素对象」和「上次的选中态」。
+// 元素是不可变的（更新时整体替换），所以引用相同就等于内容相同，可以直接跳过。
+const renderedRefs = new Map<string, CanvasElement>()
+const renderedSelected = new Set<string>()
+// 容器 → 元素 id，用于判断层级顺序有没有变化
+const containerIds = new Map<PIXI.Container, string>()
 const editingElement = ref<CanvasElement | null>(null) // 当前正在编辑的文本元素
 const chartRuntimes = new Map<string, ChartRuntime>() // 图表元素对应的 ECharts 运行时
 const editingChartElement = ref<CanvasElement | null>(null) // 当前正在编辑数据的图表元素
@@ -492,39 +498,63 @@ const renderAllElements = () => {
 
   const currentIds = new Set(props.elements.map((e) => e.id))
 
+  // 1. 删掉已经不存在的元素
   for (const [id, container] of elementContainers) {
     if (!currentIds.has(id)) {
       pixiApp.stage.removeChild(container)
       chartRuntimes.get(id)?.destroy()
       chartRuntimes.delete(id)
+      containerIds.delete(container)
       container.destroy({ children: true })
       elementContainers.delete(id)
+      renderedRefs.delete(id)
+      renderedSelected.delete(id)
     }
   }
 
-  // /渲染/更新现有元素
-  props.elements.forEach((el) => {
-    // 移除旧容器
+  // 2. 按 zIndex 只排一次（原来是在 forEach 里排，等于每个元素都重排一遍，O(n²)）
+  const sorted = [...props.elements].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0))
+
+  // 3. 增量：引用没变 + 选中态没变 → 这个元素什么都不用做
+  for (const el of sorted) {
+    const isSelected = props.selectedIds.includes(el.id)
+    const sameRef = renderedRefs.get(el.id) === el
+    const sameSelected = renderedSelected.has(el.id) === isSelected
+    if (sameRef && sameSelected) continue
+
     const existing = elementContainers.get(el.id)
     if (existing) {
       chartRuntimes.get(el.id)?.destroy()
       chartRuntimes.delete(el.id)
       pixiApp.stage.removeChild(existing)
+      containerIds.delete(existing)
       existing.destroy({ children: true })
+      elementContainers.delete(el.id)
     }
-    // 创建新容器
-    const container = renderElement(el, props.selectedIds.includes(el.id))
-    elementContainers.set(el.id, container)
 
-    const sorted = [...props.elements].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0))
-    const insertIndex = sorted.findIndex((e) => e.id === el.id)
-    const children = pixiApp.stage.children
-    if (insertIndex < children.length) {
-      pixiApp.stage.addChildAt(container, insertIndex)
-    } else {
-      pixiApp.stage.addChild(container)
-    }
-  })
+    const container = renderElement(el, isSelected)
+    elementContainers.set(el.id, container)
+    containerIds.set(container, el.id)
+    renderedRefs.set(el.id, el)
+    if (isSelected) renderedSelected.add(el.id)
+    else renderedSelected.delete(el.id)
+  }
+
+  // 4. 只有层级顺序真的变了才重排（addChildAt 会把已有子节点移动到目标位置）
+  const elementOrder = pixiApp.stage.children
+    .filter((child) => containerIds.has(child as PIXI.Container))
+    .map((child) => containerIds.get(child as PIXI.Container) as string)
+  const wantOrder = sorted.map((el) => el.id)
+  const orderChanged =
+    elementOrder.length !== wantOrder.length ||
+    elementOrder.some((id, index) => id !== wantOrder[index])
+
+  if (orderChanged) {
+    wantOrder.forEach((id, index) => {
+      const container = elementContainers.get(id)
+      if (container) pixiApp.stage.addChildAt(container, index)
+    })
+  }
 
   setupElementInteraction()
 }
@@ -1505,10 +1535,19 @@ const replaceElementContainer = (element: CanvasElement) => {
 
   const index = pixiApp.stage.getChildIndex(existing)
   pixiApp.stage.removeChild(existing)
+  containerIds.delete(existing)
   existing.destroy({ children: true })
 
-  const container = renderElement(element, props.selectedIds.includes(element.id))
+  const isSelected = props.selectedIds.includes(element.id)
+  const container = renderElement(element, isSelected)
   elementContainers.set(element.id, container)
+  containerIds.set(container, element.id)
+  // 预览用的是临时元素，把它记进基线：
+  // 这样提交（store 里的元素被替换）或取消（渲染回 store 里的旧元素）时，
+  // 引用一定不同，增量逻辑会正确地重建这一个元素。
+  renderedRefs.set(element.id, element)
+  if (isSelected) renderedSelected.add(element.id)
+  else renderedSelected.delete(element.id)
   pixiApp.stage.addChildAt(container, Math.min(index, pixiApp.stage.children.length))
   setupElementInteraction()
 }
@@ -1591,6 +1630,9 @@ onUnmounted(() => {
     app = null
   }
   elementContainers.clear()
+  renderedRefs.clear()
+  renderedSelected.clear()
+  containerIds.clear()
 })
 </script>
 
